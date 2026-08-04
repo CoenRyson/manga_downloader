@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "KomiDrop — manga bez šedé zóny",
-  description: "Lokální knihovna pro legální a otevřenou mangu s exportem do CBZ.",
+  title: "Manga Reader — lokální čtečka mangy",
+  description: "Lokální vyhledávač, knihovna, čtečka kapitol a export mangy do CBZ, EPUB nebo PDF.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
