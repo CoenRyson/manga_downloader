@@ -189,6 +189,15 @@ function safeName(value: string) {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 }
 
+function safeSetItem(key: string, value: string) {
+  try {
+    window.localStorage.setItem(key, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function escapeXml(value: string) {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
@@ -536,6 +545,7 @@ export default function Home() {
   const [webReaderResolving, setWebReaderResolving] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const readerScrollRef = useRef<HTMLDivElement>(null);
+  const chapterLoadIdRef = useRef(0);
 
   useEffect(() => {
     const storedLibrary = window.localStorage.getItem("shiori-library");
@@ -762,7 +772,7 @@ export default function Home() {
     if (!book.id || book.source === "local") return;
     setStoredBooks((current) => {
       const next = [book, ...current.filter((item) => item.id !== book.id)].slice(0, 40);
-      window.localStorage.setItem("manga-reader-books", JSON.stringify(next));
+      safeSetItem("manga-reader-books", JSON.stringify(next));
       return next;
     });
   };
@@ -770,7 +780,7 @@ export default function Home() {
   const rememberBook = (book: Manga) => {
     const next = [book.id, ...recentIds.filter((id) => id !== book.id)].slice(0, 8);
     setRecentIds(next);
-    window.localStorage.setItem("shiori-recent", JSON.stringify(next));
+    safeSetItem("shiori-recent", JSON.stringify(next));
     persistBook(book);
   };
 
@@ -778,7 +788,7 @@ export default function Home() {
     setProgress((current) => {
       const next = { ...current };
       delete next[book.id];
-      window.localStorage.setItem("shiori-progress", JSON.stringify(next));
+      safeSetItem("shiori-progress", JSON.stringify(next));
       return next;
     });
     setNotice(`${book.title} odebrána z pokračování ve čtení`);
@@ -787,7 +797,7 @@ export default function Home() {
   const markCompleted = (book: Manga) => {
     const next = { ...completed, [book.id]: { chapterCount: chapterStats(book).total, completedAt: new Date().toISOString() } };
     setCompleted(next);
-    window.localStorage.setItem("shiori-completed", JSON.stringify(next));
+    safeSetItem("shiori-completed", JSON.stringify(next));
     setHomeTab("completed");
     setView("home");
     setNotice(`${book.title} je označena jako dokončená`);
@@ -837,7 +847,7 @@ export default function Home() {
       };
       setStoredBooks((current) => {
         const next = [loaded, ...current.filter((item) => item.id !== loaded.id)].slice(0, 40);
-        window.localStorage.setItem("manga-reader-books", JSON.stringify(next));
+        safeSetItem("manga-reader-books", JSON.stringify(next));
         return next;
       });
       setSelectedId(loaded.id);
@@ -913,7 +923,7 @@ export default function Home() {
       }
       const volumes: Volume[] = [...volumeMap.entries()].map(([label, chapterMap], index) => ({
         id: `md-${book.remoteId}-v-${label}`,
-        number: label === "Bez svazku" ? index + 1 : Number.parseFloat(label) || index + 1,
+        number: label === "Bez svazku" ? 100000 + index : Number.parseFloat(label) || index + 1,
         title: label === "Bez svazku" ? "Kapitoly bez svazku" : `Volume ${label}`,
         year: book.year,
         chapters: [...chapterMap.values()].sort((a, b) => a.number - b.number),
@@ -982,7 +992,7 @@ export default function Home() {
       };
       setStoredBooks((current) => {
         const next = [loaded, ...current.filter((item) => item.id !== loaded.id)].slice(0, 40);
-        window.localStorage.setItem("manga-reader-books", JSON.stringify(next));
+        safeSetItem("manga-reader-books", JSON.stringify(next));
         return next;
       });
       setSelectedId(loaded.id);
@@ -1000,10 +1010,11 @@ export default function Home() {
     const names = [selected.title, selected.czechTitle, ...selected.aliases].map(normalizeSearch);
     const isGoblinSlayer = names.includes("goblin slayer");
     const isDandadan = names.includes("dandadan") || names.includes("dan da dan");
-    if (view === "detail" && isGoblinSlayer && selected.source !== "web" && !remoteBookLoading) {
+    const alreadyLoaded = selected.source === "web" && chapterStats(selected).external > 0;
+    if (view === "detail" && isGoblinSlayer && !alreadyLoaded && !remoteBookLoading) {
       void loadGoblinSlayerBook(selected, "detail");
     }
-    if (view === "detail" && isDandadan && selected.source !== "web" && !remoteBookLoading) {
+    if (view === "detail" && isDandadan && !alreadyLoaded && !remoteBookLoading) {
       void loadNativeWebBook(selected, "detail");
     }
   }, [view, selected.id, selected.source]);
@@ -1031,6 +1042,7 @@ export default function Home() {
   };
 
   const openChapter = async (book: Manga, volume: Volume, item: Chapter) => {
+    const loadId = ++chapterLoadIdRef.current;
     setNotice("");
     persistBook(book);
     if (item.externalUrl && book.source === "web") {
@@ -1038,7 +1050,7 @@ export default function Home() {
       if (item.language === "cs" || item.language === "en") setMangaLanguage(item.language);
       setReaderPage(0);
       const next = { ...progress, [book.id]: `${item.language === "cs" || item.language === "en" ? `${item.language}|` : ""}${volume.number}.${item.number}` };
-      setProgress(next); window.localStorage.setItem("shiori-progress", JSON.stringify(next));
+      setProgress(next); safeSetItem("shiori-progress", JSON.stringify(next));
       if (!remotePages[item.id]) {
         setReaderLoading(true);
         try {
@@ -1048,13 +1060,15 @@ export default function Home() {
           const pages = payload.images.map((url, index) => ({ name: `Stránka ${index + 1}`, url }));
           if (!pages.length) throw new Error("Prázdná kapitola");
           setRemotePages((current) => ({ ...current, [item.id]: pages }));
+          return pages.length;
         } catch {
-          setNotice("Listy kapitoly se nepodařilo načíst. Zkuste kapitolu znovu.");
+          if (chapterLoadIdRef.current === loadId) setNotice("Listy kapitoly se nepodařilo načíst. Zkuste kapitolu znovu.");
+          return item.pages;
         } finally {
-          setReaderLoading(false);
+          if (chapterLoadIdRef.current === loadId) setReaderLoading(false);
         }
       }
-      return;
+      return remotePages[item.id]?.length ?? item.pages;
     }
     if (item.externalUrl) {
       try {
@@ -1074,13 +1088,13 @@ export default function Home() {
         setWebReaderUrl(embedded.startUrl);
         setView("webreader");
       } catch { setNotice("Externí kapitola nemá platný webový odkaz."); }
-      return;
+      return item.pages;
     }
     setSelectedId(book.id); setVolumeId(volume.id); setChapterId(item.id); setView("reader");
     if (item.language === "cs" || item.language === "en") setMangaLanguage(item.language);
     setReaderPage(0);
     const next = { ...progress, [book.id]: `${item.language === "cs" || item.language === "en" ? `${item.language}|` : ""}${volume.number}.${item.number}` };
-    setProgress(next); window.localStorage.setItem("shiori-progress", JSON.stringify(next));
+    setProgress(next); safeSetItem("shiori-progress", JSON.stringify(next));
     if (book.source === "mangadex" && item.remoteId && !remotePages[item.remoteId]) {
       setReaderLoading(true);
       try {
@@ -1095,12 +1109,18 @@ export default function Home() {
           fallbackUrl: payload.chapter.data[index] ? proxyImage(`${payload.baseUrl}/data/${payload.chapter.hash}/${payload.chapter.data[index]}`) : undefined,
         }));
         setRemotePages((current) => ({ ...current, [item.remoteId as string]: pages }));
+        return pages.length;
       } catch {
-        setNotice("Stránky kapitoly se nepodařilo načíst. Otevřete ji přímo na MangaDexu.");
+        if (chapterLoadIdRef.current === loadId) setNotice("Stránky kapitoly se nepodařilo načíst. Otevřete ji přímo na MangaDexu.");
+        return item.pages;
       } finally {
-        setReaderLoading(false);
+        if (chapterLoadIdRef.current === loadId) setReaderLoading(false);
       }
     }
+    const cachedKey = book.source === "web" ? item.id : item.remoteId;
+    if (cachedKey && remotePages[cachedKey]) return remotePages[cachedKey].length;
+    if (book.localPages) return book.localPages.length;
+    return item.pages;
   };
 
   const readerRemoteKey = selected.source === "web" ? selectedChapter.id : selectedChapter.remoteId;
@@ -1110,8 +1130,9 @@ export default function Home() {
   const readerLanguage = selected.source === "mangadex" && (selectedChapter.language === "cs" || selectedChapter.language === "en") ? selectedChapter.language : undefined;
   const readerNavigationVolumes = readerLanguage ? volumesInLanguage(selected, readerLanguage) : selected.volumes;
   const readerVolumeIndex = readerNavigationVolumes.findIndex((volume) => volume.id === selectedVolume.id);
-  const readerChapterIndex = selectedVolume.chapters.findIndex((chapter) => chapter.id === selectedChapter.id);
-  const readerAtEnd = readerPage >= Math.max(0, readerPageCount - 1) && readerVolumeIndex === readerNavigationVolumes.length - 1 && readerChapterIndex === selectedVolume.chapters.length - 1;
+  const readerNavigationVolume = readerNavigationVolumes.find((volume) => volume.id === selectedVolume.id) ?? readerNavigationVolumes[0];
+  const readerChapterIndex = readerNavigationVolume.chapters.findIndex((chapter) => chapter.id === selectedChapter.id);
+  const readerAtEnd = readerPage >= Math.max(0, readerPageCount - 1) && readerVolumeIndex === readerNavigationVolumes.length - 1 && readerChapterIndex === readerNavigationVolume.chapters.length - 1;
 
   const nextReaderPage = () => {
     if (readerLoading) return;
@@ -1139,20 +1160,25 @@ export default function Home() {
     const currentChapterIndex = navigationVolume.chapters.findIndex((chapter) => chapter.id === selectedChapter.id);
     const previousChapter = navigationVolume.chapters[currentChapterIndex - 1];
     if (previousChapter) {
-      void openChapter(selected, selectedVolume, previousChapter).then(() => setReaderPage(Math.max(0, previousChapter.pages - 1)));
+      void openChapter(selected, selectedVolume, previousChapter).then((pageCount) => setReaderPage(Math.max(0, pageCount - 1)));
       return;
     }
     const currentVolumeIndex = readerNavigationVolumes.findIndex((volume) => volume.id === selectedVolume.id);
     const previousVolume = readerNavigationVolumes[currentVolumeIndex - 1];
     const lastChapter = previousVolume?.chapters[previousVolume.chapters.length - 1];
-    if (previousVolume && lastChapter) void openChapter(selected, previousVolume, lastChapter).then(() => setReaderPage(Math.max(0, lastChapter.pages - 1)));
+    if (previousVolume && lastChapter) void openChapter(selected, previousVolume, lastChapter).then((pageCount) => setReaderPage(Math.max(0, pageCount - 1)));
   };
+
+  const nextReaderPageRef = useRef(nextReaderPage);
+  const previousReaderPageRef = useRef(previousReaderPage);
+  nextReaderPageRef.current = nextReaderPage;
+  previousReaderPageRef.current = previousReaderPage;
 
   useEffect(() => {
     if (view !== "reader") return;
     const handleKey = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "ArrowRight") { event.preventDefault(); nextReaderPage(); }
-      if (event.key === "ArrowLeft") { event.preventDefault(); previousReaderPage(); }
+      if (event.key === "ArrowRight") { event.preventDefault(); nextReaderPageRef.current(); }
+      if (event.key === "ArrowLeft") { event.preventDefault(); previousReaderPageRef.current(); }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         readerScrollRef.current?.scrollBy({ top: event.key === "ArrowDown" ? 120 : -120, behavior: "smooth" });
@@ -1161,14 +1187,14 @@ export default function Home() {
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  });
+  }, [view]);
 
   useEffect(() => {
     if (view !== "reader") return;
     queueMicrotask(() => setProgress((current) => {
       const languagePrefix = selectedChapter.language === "cs" || selectedChapter.language === "en" ? `${selectedChapter.language}|` : "";
       const next = { ...current, [selected.id]: `${languagePrefix}${selectedVolume.number}.${selectedChapter.number}.${readerPage + 1}` };
-      window.localStorage.setItem("shiori-progress", JSON.stringify(next));
+      safeSetItem("shiori-progress", JSON.stringify(next));
       return next;
     }));
   }, [readerPage, view, selected.id, selectedVolume.number, selectedChapter.number, selectedChapter.language]);
@@ -1190,7 +1216,7 @@ export default function Home() {
 
   const toggleLibrary = (book: Manga) => {
     const next = libraryIds.includes(book.id) ? libraryIds.filter((id) => id !== book.id) : [...libraryIds, book.id];
-    setLibraryIds(next); window.localStorage.setItem("shiori-library", JSON.stringify(next));
+    setLibraryIds(next); safeSetItem("shiori-library", JSON.stringify(next));
     if (next.includes(book.id)) persistBook(book);
     setNotice(next.includes(book.id) ? "Přidáno do místní knihovny" : "Odebráno z knihovny");
   };
@@ -1213,7 +1239,7 @@ export default function Home() {
       localPages: pages,
     };
     setLocalBooks((current) => [book, ...current]);
-    const nextLibrary = [...libraryIds, id]; setLibraryIds(nextLibrary); window.localStorage.setItem("shiori-library", JSON.stringify(nextLibrary));
+    const nextLibrary = [...libraryIds, id]; setLibraryIds(nextLibrary); safeSetItem("shiori-library", JSON.stringify(nextLibrary));
     setImportOpen(false); setImportTitle(""); setImportFiles([]); chooseBook(book); setNotice("Manga byla načtena lokálně");
   };
 
