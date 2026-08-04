@@ -874,14 +874,15 @@ export default function Home() {
       let offset = 0;
       let total = 1;
       while (offset < total) {
-        const url = new URL(`https://api.mangadex.org/manga/${book.remoteId}/feed`);
-        url.searchParams.set("limit", "100");
-        url.searchParams.set("offset", String(offset));
-        url.searchParams.append("translatedLanguage[]", "cs");
-        url.searchParams.append("translatedLanguage[]", "en");
-        url.searchParams.set("order[volume]", "asc");
-        url.searchParams.set("order[chapter]", "asc");
-        const response = await fetch(url, { headers: { Accept: "application/json" } });
+        const params = new URLSearchParams();
+        params.set("id", book.remoteId);
+        params.set("limit", "100");
+        params.set("offset", String(offset));
+        params.append("translatedLanguage[]", "cs");
+        params.append("translatedLanguage[]", "en");
+        params.set("order[volume]", "asc");
+        params.set("order[chapter]", "asc");
+        const response = await fetch(`/api/mangadex-feed?${params.toString()}`, { headers: { Accept: "application/json" } });
         if (!response.ok) throw new Error(`MangaDex feed ${response.status}`);
         const payload = await response.json() as { data?: typeof chapters; total?: number };
         chapters.push(...(payload.data ?? []));
