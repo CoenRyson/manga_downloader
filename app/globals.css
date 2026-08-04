@@ -125,7 +125,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(64, 88, 214,
 .manga-resume-card .resume-open { width: 100%; min-height: 125px; display: grid; grid-template-columns: 48px minmax(0, 1fr) 26px; align-items: center; gap: 13px; padding: 13px 40px 13px 20px; color: #fff; border: 0; background: transparent; text-align: left; cursor: pointer; }
 .manga-resume-card .resume-open:hover { background: rgba(255,255,255,.055); }
 .manga-resume-card .resume-open > b { color: rgba(255,255,255,.24); font-size: 20px; }
-.resume-remove { position: absolute; top: 10px; right: 11px; width: 22px; height: 22px; display: grid; place-items: center; color: rgba(255,255,255,.52); border: 1px solid rgba(255,255,255,.16); border-radius: 50%; background: rgba(0,0,0,.2); cursor: pointer; }
+.resume-remove { position: absolute; top: 10px; right: 11px; width: 22px; height: 22px; padding: 0; display: grid; place-items: center; color: rgba(255,255,255,.52); border: 1px solid rgba(255,255,255,.16); border-radius: 50%; background: rgba(0,0,0,.2); font-size: 13px; line-height: 1; cursor: pointer; }
 .resume-remove:hover { color: #fff; border-color: #9e252d; background: #9e252d; }
 .reader-controls .finish-reader { color: #d7ffe8; border-color: #55a878; background: rgba(50,160,108,.17); }
 .manga-resume-row.empty { display: grid; grid-template-columns: 1fr; }
