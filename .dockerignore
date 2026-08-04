@@ -8,3 +8,11 @@ work
 coverage
 .git
 *.log
+.env*
+
+tests
+examples
+db
+README.md
+Spustit Manga Reader.cmd
+pnpm-lock.yaml
