@@ -247,7 +247,8 @@ button:hover > .book-cover, .shelf-book:hover .book-cover { transform: translate
 .language-tabs button.active { color: #fff; border-color: var(--blue); background: var(--blue); box-shadow: 0 8px 22px rgba(64,88,214,.18); }
 .language-tabs button:disabled { opacity: .4; cursor: not-allowed; }
 .catalogue-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 34px 22px; }
-.catalogue-item { min-width: 0; }
+.catalogue-item { min-width: 0; border-radius: 12px; outline: 2px solid transparent; outline-offset: 5px; transition: outline-color .12s ease; }
+.catalogue-item.active { outline-color: var(--blue); }
 .cover-button { width: 100%; display: block; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .catalogue-item > div:last-child { padding: 14px 3px 0; }
 .catalogue-labels { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }

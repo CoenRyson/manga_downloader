@@ -508,6 +508,7 @@ export default function Home() {
   const [view, setView] = useState<View>("home");
   const [homeTab, setHomeTab] = useState<"continue" | "completed" | "downloads">("continue");
   const [query, setQuery] = useState("");
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [localBooks, setLocalBooks] = useState<Manga[]>([]);
   const [mangaDexBooks, setMangaDexBooks] = useState<Manga[]>([]);
   const [discoveryBooks, setDiscoveryBooks] = useState<Manga[]>([]);
@@ -546,6 +547,7 @@ export default function Home() {
   const searchRef = useRef<HTMLInputElement>(null);
   const readerScrollRef = useRef<HTMLDivElement>(null);
   const chapterLoadIdRef = useRef(0);
+  const catalogueItemRefs = useRef(new Map<string, HTMLElement>());
 
   useEffect(() => {
     const storedLibrary = window.localStorage.getItem("shiori-library");
@@ -746,6 +748,19 @@ export default function Home() {
       return searchScore(a, normalized) - searchScore(b, normalized) || bookRichness(b) - bookRichness(a) || a.title.localeCompare(b.title, "cs");
     });
   }, [filterBaseBooks, genreFilter, minRating, query, sortMode, yearFilter]);
+
+  const activeIndex = filteredBooks.length ? Math.min(Math.max(highlightedIndex, 0), filteredBooks.length - 1) : -1;
+
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [query, yearFilter, genreFilter, minRating, sortMode]);
+
+  useEffect(() => {
+    if (activeIndex < 0) return;
+    const activeBook = filteredBooks[activeIndex];
+    if (!activeBook) return;
+    catalogueItemRefs.current.get(activeBook.id)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [activeIndex, filteredBooks]);
 
   const suggestions = useMemo(() => {
     const normalized = normalizeSearch(query);
@@ -1222,7 +1237,15 @@ export default function Home() {
   };
 
   const searchKey = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter" && filteredBooks[0]) chooseBook(filteredBooks[0]);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (filteredBooks.length) setHighlightedIndex((current) => Math.min(current + 1, filteredBooks.length - 1));
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (filteredBooks.length) setHighlightedIndex((current) => Math.max(current - 1, 0));
+    }
+    if (event.key === "Enter" && filteredBooks[activeIndex]) chooseBook(filteredBooks[activeIndex]);
     if (event.key === "Escape") { setQuery(""); searchRef.current?.blur(); }
   };
 
@@ -1368,7 +1391,7 @@ export default function Home() {
       {(yearFilter || genreFilter || minRating) && <div className="active-filters" aria-label="Aktivní filtry">{yearFilter && <button onClick={() => setYearFilter("")}>Rok: {yearFilter} ×</button>}{genreFilter && <button onClick={() => setGenreFilter("")}>Žánr: {genreFilter} ×</button>}{minRating && <button onClick={() => setMinRating("")}>★ {minRating},0+ ×</button>}</div>}
       {(remoteStatus === "loading" || discoveryStatus === "loading") && query.trim().length >= 2 && <div className="provider-status"><i /> Prohledávám MangaDex, AniList, Google Books, MyAnimeList a Open Library…</div>}
       {(remoteStatus === "error" || discoveryStatus === "error" || discoveryStatus === "partial") && <div className="provider-status error"><i /> Některý online katalog je právě omezený. Výsledky z ostatních zdrojů a místní knihovna fungují dál.</div>}
-      {filteredBooks.length > 0 ? <div className="catalogue-grid">{filteredBooks.map((book) => { const stats = chapterStats(book); return <article className="catalogue-item" key={book.id}><button className="cover-button" onClick={() => chooseBook(book)}><Cover book={book} /></button><div><div className="catalogue-labels"><span className={`source-label ${book.source}`}>{sourceTitle(book.source)}</span><span className={`rating-pill ${typeof book.rating === "number" ? "ready" : ""}`} title={ratingMeta(book)}>★ {ratingLabel(book)}</span>{book.source === "mangadex" && <span className={`readability-pill ${stats.internal > 0 ? "ready" : ""}`}>{stats.internal > 0 ? `${stats.internal} ČITELNÝCH` : "OVĚŘIT KAPITOLY"}</span>}</div><button className="title-button" onClick={() => chooseBook(book)}>{book.title}</button><p>{book.czechTitle}</p><small>{book.author} · {ratingMeta(book)}</small></div></article>; })}</div> : <div className="no-results"><strong>{remoteStatus === "loading" || discoveryStatus === "loading" ? "Prohledávám online katalogy…" : "Titul nebyl nalezen"}</strong><p>Zkuste český, anglický nebo původní název. Pro vlastní legálně získané stránky použijte místní import.</p><button onClick={() => setImportOpen(true)}>Importovat vlastní soubory</button></div>}
+      {filteredBooks.length > 0 ? <div className="catalogue-grid">{filteredBooks.map((book, index) => { const stats = chapterStats(book); return <article ref={(node) => { if (node) catalogueItemRefs.current.set(book.id, node); else catalogueItemRefs.current.delete(book.id); }} className={`catalogue-item${index === activeIndex ? " active" : ""}`} key={book.id} onMouseEnter={() => setHighlightedIndex(index)}><button className="cover-button" onClick={() => chooseBook(book)}><Cover book={book} /></button><div><div className="catalogue-labels"><span className={`source-label ${book.source}`}>{sourceTitle(book.source)}</span><span className={`rating-pill ${typeof book.rating === "number" ? "ready" : ""}`} title={ratingMeta(book)}>★ {ratingLabel(book)}</span>{book.source === "mangadex" && <span className={`readability-pill ${stats.internal > 0 ? "ready" : ""}`}>{stats.internal > 0 ? `${stats.internal} ČITELNÝCH` : "OVĚŘIT KAPITOLY"}</span>}</div><button className="title-button" onClick={() => chooseBook(book)}>{book.title}</button><p>{book.czechTitle}</p><small>{book.author} · {ratingMeta(book)}</small></div></article>; })}</div> : <div className="no-results"><strong>{remoteStatus === "loading" || discoveryStatus === "loading" ? "Prohledávám online katalogy…" : "Titul nebyl nalezen"}</strong><p>Zkuste český, anglický nebo původní název. Pro vlastní legálně získané stránky použijte místní import.</p><button onClick={() => setImportOpen(true)}>Importovat vlastní soubory</button></div>}
     </div>
   );
 
