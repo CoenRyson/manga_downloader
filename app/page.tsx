@@ -562,22 +562,22 @@ export default function Home() {
     const timer = window.setTimeout(async () => {
       setRemoteStatus("loading");
       try {
-        const url = new URL("https://api.mangadex.org/manga");
-        url.searchParams.set("title", title);
-        url.searchParams.set("limit", "12");
-        url.searchParams.append("includes[]", "cover_art");
-        url.searchParams.append("includes[]", "author");
-        url.searchParams.append("contentRating[]", "safe");
-        url.searchParams.append("contentRating[]", "suggestive");
-        const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
+        const params = new URLSearchParams();
+        params.set("title", title);
+        params.set("limit", "12");
+        params.append("includes[]", "cover_art");
+        params.append("includes[]", "author");
+        params.append("contentRating[]", "safe");
+        params.append("contentRating[]", "suggestive");
+        const response = await fetch(`/api/mangadex-search?${params.toString()}`, { signal: controller.signal, headers: { Accept: "application/json" } });
         if (!response.ok) throw new Error(`MangaDex ${response.status}`);
         const payload = await response.json() as { data?: MangaDexItem[] };
         const initialIncoming = (payload.data ?? []).map(mapMangaDexItem);
         let incoming = initialIncoming;
         try {
-          const statisticsUrl = new URL("https://api.mangadex.org/statistics/manga");
-          for (const book of initialIncoming) if (book.remoteId) statisticsUrl.searchParams.append("manga[]", book.remoteId);
-          const statisticsResponse = await fetch(statisticsUrl, { signal: controller.signal, headers: { Accept: "application/json" } });
+          const statisticsParams = new URLSearchParams();
+          for (const book of initialIncoming) if (book.remoteId) statisticsParams.append("manga[]", book.remoteId);
+          const statisticsResponse = await fetch(`/api/mangadex-search/statistics?${statisticsParams.toString()}`, { signal: controller.signal, headers: { Accept: "application/json" } });
           if (statisticsResponse.ok) {
             const statistics = await statisticsResponse.json() as MangaDexStatistics;
             incoming = initialIncoming.map((book) => {
