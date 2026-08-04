@@ -509,6 +509,7 @@ export default function Home() {
   const [homeTab, setHomeTab] = useState<"continue" | "completed" | "downloads">("continue");
   const [query, setQuery] = useState("");
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [suggestionIndex, setSuggestionIndex] = useState(0);
   const [localBooks, setLocalBooks] = useState<Manga[]>([]);
   const [mangaDexBooks, setMangaDexBooks] = useState<Manga[]>([]);
   const [discoveryBooks, setDiscoveryBooks] = useState<Manga[]>([]);
@@ -774,6 +775,12 @@ export default function Home() {
       return true;
     }).sort((a, b) => searchScore(a, normalized) - searchScore(b, normalized) || (b.rating ?? -1) - (a.rating ?? -1)).slice(0, 6);
   }, [catalogue, query]);
+
+  const activeSuggestionIndex = suggestions.length ? Math.min(Math.max(suggestionIndex, 0), suggestions.length - 1) : -1;
+
+  useEffect(() => {
+    setSuggestionIndex(0);
+  }, [query]);
 
   const libraryBooks = catalogue.filter((book) => libraryIds.includes(book.id));
   const isCompletedBook = (book: Manga) => {
@@ -1372,8 +1379,17 @@ export default function Home() {
       <header className="manga-home-brand"><button onClick={() => setView("home")}><i>MR</i><span><strong>MANGA READER</strong><small>LOCAL EDITION</small></span></button><button className="manga-home-import" onClick={() => setImportOpen(true)}>＋ Vlastní manga</button></header>
       <section className="manga-search-core">
         <span>NAJDI. OTEVŘI. ČTI.</span>
-        <label><i>⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") setView("library"); }} placeholder="Název mangy česky, anglicky nebo japonsky…" autoComplete="off" autoFocus /><button onClick={() => setView("library")}>HLEDAT</button></label>
-        {suggestions.length > 0 && <div className="search-suggestions" role="listbox" aria-label="Návrhy mang">{suggestions.map((book) => <button key={book.id} type="button" onClick={() => { setQuery(book.title); chooseBook(book); }}><span><strong>{book.title}</strong><small>{book.czechTitle}</small></span><b>{typeof book.rating === "number" ? `★ ${book.rating.toFixed(1)}` : "—"}</b><i>→</i></button>)}</div>}
+        <label><i>⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+          if (event.key === "ArrowDown") { event.preventDefault(); if (suggestions.length) setSuggestionIndex((current) => Math.min(current + 1, suggestions.length - 1)); return; }
+          if (event.key === "ArrowUp") { event.preventDefault(); if (suggestions.length) setSuggestionIndex((current) => Math.max(current - 1, 0)); return; }
+          if (event.key === "Enter") {
+            const book = suggestions[activeSuggestionIndex];
+            if (book) { setQuery(book.title); chooseBook(book); } else setView("library");
+            return;
+          }
+          if (event.key === "Escape") setQuery("");
+        }} placeholder="Název mangy česky, anglicky nebo japonsky…" autoComplete="off" autoFocus /><button onClick={() => setView("library")}>HLEDAT</button></label>
+        {suggestions.length > 0 && <div className="search-suggestions" role="listbox" aria-label="Návrhy mang">{suggestions.map((book, index) => <button key={book.id} type="button" role="option" aria-selected={index === activeSuggestionIndex} className={index === activeSuggestionIndex ? "active" : ""} onMouseEnter={() => setSuggestionIndex(index)} onClick={() => { setQuery(book.title); chooseBook(book); }}><span><strong>{book.title}</strong><small>{book.czechTitle}</small></span><b>{typeof book.rating === "number" ? `★ ${book.rating.toFixed(1)}` : "—"}</b><i>→</i></button>)}</div>}
         <small>MangaDex + automatický webový výběr pro čtení · další katalogy pro přesné názvy a obálky</small>
       </section>
       <section className="manga-home-tabs">

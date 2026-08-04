@@ -99,7 +99,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(64, 88, 214,
 .manga-search-core label > button:hover { background: #a52a32; }
 .search-suggestions { position: absolute; top: 88px; right: 0; left: 0; z-index: 3; padding: 7px; border: 1px solid rgba(255,255,255,.38); border-radius: 4px; background: rgba(21,23,31,.97); box-shadow: 0 18px 42px rgba(0,0,0,.42); }
 .search-suggestions button { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto 16px; align-items: center; gap: 10px; padding: 10px 11px; color: #eff0f4; border: 0; border-radius: 3px; background: transparent; text-align: left; cursor: pointer; }
-.search-suggestions button:hover { background: rgba(255,255,255,.09); }
+.search-suggestions button:hover, .search-suggestions button.active { background: rgba(255,255,255,.09); }
 .search-suggestions span { min-width: 0; display: grid; gap: 3px; }
 .search-suggestions strong, .search-suggestions small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-suggestions strong { font-size: 11px; }
