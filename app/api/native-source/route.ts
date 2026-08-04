@@ -45,7 +45,7 @@ function groupChapters(chapters: ChapterLink[], provider: "Dandadan Manga Online
 }
 
 async function dandadan() {
-  const response = await fetch("https://dandadanmanga-online.net/", { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local chapter index" } });
+  const response = await fetch("https://dandadanmanga-online.net/", { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local chapter index" }, signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`Dandadan ${response.status}`);
   const html = await response.text();
   const found = new Map<string, ChapterLink>();
@@ -61,7 +61,7 @@ async function dandadan() {
 
 async function mangaRead(title: string) {
   const searchUrl = `https://www.mangaread.org/?s=${encodeURIComponent(title)}&post_type=wp-manga`;
-  const searchResponse = await fetch(searchUrl, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local source resolver" } });
+  const searchResponse = await fetch(searchUrl, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local source resolver" }, signal: AbortSignal.timeout(15000) });
   if (!searchResponse.ok) throw new Error(`MangaRead search ${searchResponse.status}`);
   const searchHtml = await searchResponse.text();
   const candidates: { title: string; url: string; score: number }[] = [];
@@ -72,7 +72,7 @@ async function mangaRead(title: string) {
   }
   const best = candidates.sort((a, b) => b.score - a.score)[0];
   if (!best || best.score < 30) throw new Error("MangaRead nenalezl shodu");
-  const seriesResponse = await fetch(best.url, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local chapter index" } });
+  const seriesResponse = await fetch(best.url, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local chapter index" }, signal: AbortSignal.timeout(15000) });
   if (!seriesResponse.ok) throw new Error(`MangaRead series ${seriesResponse.status}`);
   const seriesHtml = await seriesResponse.text();
   const found = new Map<string, ChapterLink>();

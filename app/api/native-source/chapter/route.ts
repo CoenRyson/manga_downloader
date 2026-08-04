@@ -24,10 +24,17 @@ function validImageFor(chapterHost: string, image: URL, tag: string) {
 
 export async function GET(request: Request) {
   const rawUrl = new URL(request.url).searchParams.get("url") ?? "";
+
+  let chapterUrl: URL;
   try {
-    const chapterUrl = new URL(rawUrl);
-    if (!allowedChapter(chapterUrl)) return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
-    const response = await fetch(chapterUrl, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local page viewer" } });
+    chapterUrl = new URL(rawUrl);
+  } catch {
+    return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
+  }
+  if (!allowedChapter(chapterUrl)) return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
+
+  try {
+    const response = await fetch(chapterUrl, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local page viewer" }, signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Zdroj odpověděl ${response.status}`);
     const html = await response.text();
     const images: string[] = [];

@@ -15,6 +15,7 @@ export async function GET(request: Request) {
     const response = await fetch(target, {
       headers: { Accept: "application/json", "User-Agent": "Manga Reader local search proxy" },
       cache: "no-store",
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`MangaDex feed ${response.status}`);
 
