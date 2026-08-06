@@ -44,6 +44,7 @@ export async function GET(request: Request) {
   try {
     const response = await fetch(searchUrl, {
       headers: { "User-Agent": "Mozilla/5.0 Manga Reader local source resolver" },
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`Provider odpověděl ${response.status}`);
     const html = await response.text();
@@ -64,6 +65,6 @@ export async function GET(request: Request) {
     }
     return Response.json({ provider: "MangaRead", mode: "direct", searchUrl, ...best });
   } catch {
-    return Response.json({ provider: "MangaRead", mode: "search", searchUrl });
+    return Response.json({ error: "Vyhledávání na MangaRead je dočasně nedostupné.", provider: "MangaRead", mode: "search", searchUrl }, { status: 502 });
   }
 }

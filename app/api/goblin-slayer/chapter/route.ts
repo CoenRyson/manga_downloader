@@ -8,14 +8,21 @@ function attribute(tag: string, name: string) {
 
 export async function GET(request: Request) {
   const rawUrl = new URL(request.url).searchParams.get("url") ?? "";
-  try {
-    const chapterUrl = new URL(rawUrl);
-    if (chapterUrl.protocol !== "https:" || chapterUrl.hostname !== "goblinslayerfree.com" || !/^\/manga\/goblin-slayer-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(chapterUrl.pathname)) {
-      return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
-    }
 
+  let chapterUrl: URL;
+  try {
+    chapterUrl = new URL(rawUrl);
+  } catch {
+    return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
+  }
+  if (chapterUrl.protocol !== "https:" || chapterUrl.hostname !== "goblinslayerfree.com" || !/^\/manga\/goblin-slayer-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(chapterUrl.pathname)) {
+    return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
+  }
+
+  try {
     const response = await fetch(chapterUrl, {
       headers: { "User-Agent": "Mozilla/5.0 Manga Reader local page viewer" },
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`Zdroj odpověděl ${response.status}`);
     const html = await response.text();

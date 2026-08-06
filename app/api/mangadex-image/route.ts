@@ -7,12 +7,17 @@ function allowedMangaDexImage(url: URL) {
 export async function GET(request: Request) {
   const rawUrl = new URL(request.url).searchParams.get("url") ?? "";
 
+  let imageUrl: URL;
   try {
-    const imageUrl = new URL(rawUrl);
-    if (!allowedMangaDexImage(imageUrl)) {
-      return Response.json({ error: "Nepovolená adresa obrázku." }, { status: 400 });
-    }
+    imageUrl = new URL(rawUrl);
+  } catch {
+    return Response.json({ error: "Nepovolená adresa obrázku." }, { status: 400 });
+  }
+  if (!allowedMangaDexImage(imageUrl)) {
+    return Response.json({ error: "Nepovolená adresa obrázku." }, { status: 400 });
+  }
 
+  try {
     const requestedRange = request.headers.get("range");
     const range = requestedRange && /^bytes=\d+-\d*$/i.test(requestedRange) ? requestedRange : undefined;
     const response = await fetch(imageUrl, {
@@ -22,6 +27,7 @@ export async function GET(request: Request) {
         ...(range ? { Range: range } : {}),
       },
       cache: "no-store",
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`MangaDex image ${response.status}`);
 

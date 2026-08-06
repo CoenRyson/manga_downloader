@@ -15,6 +15,7 @@ export async function GET() {
   try {
     const response = await fetch("https://goblinslayerfree.com/", {
       headers: { "User-Agent": "Mozilla/5.0 Manga Reader local chapter index" },
+      signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`Zdroj odpověděl ${response.status}`);
     const html = await response.text();

@@ -11,6 +11,7 @@ export async function GET(request: Request) {
       const response = await fetch(`https://api.mangadex.org/at-home/server/${chapterId}`, {
         headers: { Accept: "application/json", "User-Agent": "Manga Reader local chapter loader" },
         cache: "no-store",
+        signal: AbortSignal.timeout(15000),
       });
       if (response.ok) {
         const payload = await response.json();
