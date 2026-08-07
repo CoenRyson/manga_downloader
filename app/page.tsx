@@ -483,8 +483,8 @@ function Cover({ book, compact = false }: { book: Manga; compact?: boolean }) {
   );
 }
 
-function ComicSheet({ book, currentChapter, page, localPage }: { book: Manga; currentChapter: Chapter; page: number; localPage?: LocalPage }) {
-  if (localPage) return <article className="comic-sheet image-sheet" style={{ "--book-accent": book.accent, "--book-soft": book.accentSoft } as CSSProperties}><img src={localPage.url} alt={`${book.title}, stránka ${page}`} referrerPolicy="no-referrer" onError={(event) => {
+function ComicSheet({ book, currentChapter, page, localPage, onImageLoad }: { book: Manga; currentChapter: Chapter; page: number; localPage?: LocalPage; onImageLoad?: (image: HTMLImageElement) => void }) {
+  if (localPage) return <article className="comic-sheet image-sheet" style={{ "--book-accent": book.accent, "--book-soft": book.accentSoft } as CSSProperties}><img src={localPage.url} alt={`${book.title}, stránka ${page}`} referrerPolicy="no-referrer" onLoad={(event) => onImageLoad?.(event.currentTarget)} onError={(event) => {
     if (!localPage.fallbackUrl || event.currentTarget.dataset.fallbackApplied) return;
     event.currentTarget.dataset.fallbackApplied = "true";
     event.currentTarget.src = localPage.fallbackUrl;
@@ -506,10 +506,13 @@ function ComicSheet({ book, currentChapter, page, localPage }: { book: Manga; cu
 
 export default function Home() {
   const [view, setView] = useState<View>("home");
-  const [theme, setTheme] = useState<"light" | "dark">(() => {
-    if (typeof window === "undefined") return "light";
-    return window.localStorage.getItem("manga-reader-theme") === "dark" ? "dark" : "light";
-  });
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setTheme(window.localStorage.getItem("manga-reader-theme") === "dark" ? "dark" : "light");
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
   const toggleTheme = () => {
     setTheme((current) => {
       const next = current === "light" ? "dark" : "light";
@@ -536,13 +539,14 @@ export default function Home() {
   const [libraryIds, setLibraryIds] = useState<string[]>([]);
   const [progress, setProgress] = useState<Record<string, string>>({});
   const [completed, setCompleted] = useState<Record<string, CompletionRecord>>({});
-  const [sourceFilter, setSourceFilter] = useState<"all" | "readable" | Manga["source"]>("readable");
+  const [sourceFilter, setSourceFilter] = useState<"all" | "readable" | Manga["source"]>("all");
   const [yearFilter, setYearFilter] = useState("");
   const [genreFilter, setGenreFilter] = useState("");
   const [minRating, setMinRating] = useState("");
   const [sortMode, setSortMode] = useState<"relevance" | "rating" | "newest" | "oldest">("relevance");
   const [mangaLanguage, setMangaLanguage] = useState<ReadingLanguage>("cs");
   const [readerScale, setReaderScale] = useState(100);
+  const [readerFitSize, setReaderFitSize] = useState<{ width: number; height: number } | null>(null);
   const [readerPage, setReaderPage] = useState(0);
   const [chapterPanel, setChapterPanel] = useState(true);
   const [importOpen, setImportOpen] = useState(false);
@@ -1077,6 +1081,9 @@ export default function Home() {
   const openChapter = async (book: Manga, volume: Volume, item: Chapter) => {
     const loadId = ++chapterLoadIdRef.current;
     setNotice("");
+    setReaderScale(100);
+    setReaderFitSize(null);
+    setChapterPanel(false);
     persistBook(book);
     if (item.externalUrl && book.source === "web") {
       setSelectedId(book.id); setVolumeId(volume.id); setChapterId(item.id); setView("reader");
@@ -1387,7 +1394,7 @@ export default function Home() {
     const renderReadingCards = (books: Manga[], completedView = false) => books.length ? books.map((book) => <article className="manga-resume-card" key={book.id}><button className="resume-open" onClick={() => completedView ? chooseBook(book) : resumeReading(book)}><Cover book={book} compact /><span><small>{completedView ? "DOKONČENO" : `POZICE ${progressLabel(progress[book.id])}`}</small><strong>{book.title}</strong><i>{book.czechTitle}</i></span><b>{completedView ? "✓" : "→"}</b></button>{!completedView && <button className="resume-remove" onClick={() => removeFromContinue(book)} aria-label={`Odebrat ${book.title} z pokračování`}>×</button>}</article>) : <div className="manga-empty-library"><span>{completedView ? "ZATÍM NIC DOKONČENÉHO" : "ZATÍM NIC ROZČTENÉHO"}</span><strong>{completedView ? "Po poslední kapitole můžete mangu označit jako dokončenou." : "Každá manga se po otevření první kapitoly objeví zde."}</strong></div>;
     return <div className="screen manga-home">
       <div className="manga-home-shade" />
-      <header className="manga-home-brand"><button onClick={() => setView("home")}><i><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 1.5 14.6 9.4 22.5 12 14.6 14.6 12 22.5 9.4 14.6 1.5 12 9.4 9.4Z" /></svg></i><span><strong>MANGA READER</strong><small>LOCAL EDITION</small></span></button><div className="manga-home-actions"><button className={`theme-toggle ${theme === "light" ? "to-dark" : "to-light"}`} onClick={toggleTheme} aria-label={theme === "light" ? "Přepnout na tmavý režim" : "Přepnout na světlý režim"} title={theme === "light" ? "Tmavý režim" : "Světlý režim"}>{theme === "light" ? "☾" : "☀"}</button><button className="manga-home-import" onClick={() => setImportOpen(true)}>＋ Vlastní manga</button></div></header>
+      <header className="manga-home-brand"><button onClick={() => setView("home")}><i><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 1.5 14.6 9.4 22.5 12 14.6 14.6 12 22.5 9.4 14.6 1.5 12 9.4 9.4Z" /></svg></i><span><strong>MANGA READER</strong><small>LOCAL EDITION</small></span></button><div className="manga-home-actions"><nav className="home-nav" aria-label="Hlavni navigace"><button className="active" onClick={() => setView("home")}>Domu</button><button onClick={() => setView("library")}>Knihovna</button><button onClick={() => setView("downloads")}>Stazene</button><button onClick={() => setView("settings")}>Nastaveni</button></nav><button className={`theme-toggle ${theme === "light" ? "to-dark" : "to-light"}`} onClick={toggleTheme} aria-label={theme === "light" ? "Přepnout na tmavý režim" : "Přepnout na světlý režim"} title={theme === "light" ? "Tmavý režim" : "Světlý režim"}>{theme === "light" ? "☾" : "☀"}</button><button className="manga-home-import" onClick={() => setImportOpen(true)}>＋ Vlastní manga</button></div></header>
       <section className="manga-search-core">
         <span>NAJDI. OTEVŘI. ČTI.</span>
         <label><i>⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
@@ -1395,16 +1402,16 @@ export default function Home() {
           if (event.key === "ArrowUp") { event.preventDefault(); if (suggestions.length) setSuggestionIndex((current) => Math.max(current - 1, 0)); return; }
           if (event.key === "Enter") {
             const book = suggestions[activeSuggestionIndex];
-            if (book) { setQuery(book.title); chooseBook(book); } else setView("library");
+            if (book) { setQuery(book.title); chooseBook(book); } else { setSourceFilter("all"); setView("library"); }
             return;
           }
           if (event.key === "Escape") setQuery("");
-        }} placeholder="Název mangy česky, anglicky nebo japonsky…" autoComplete="off" autoFocus /><button onClick={() => setView("library")}>HLEDAT</button></label>
+        }} placeholder="Název mangy česky, anglicky nebo japonsky…" autoComplete="off" autoFocus /><button onClick={() => { setSourceFilter("all"); setView("library"); }}>HLEDAT</button></label>
         {suggestions.length > 0 && <div className="search-suggestions" role="listbox" aria-label="Návrhy mang">{suggestions.map((book, index) => <button key={book.id} type="button" role="option" aria-selected={index === activeSuggestionIndex} className={index === activeSuggestionIndex ? "active" : ""} onMouseEnter={() => setSuggestionIndex(index)} onClick={() => { setQuery(book.title); chooseBook(book); }}><span><strong>{book.title}</strong><small>{book.czechTitle}</small></span><b>{typeof book.rating === "number" ? `★ ${book.rating.toFixed(1)}` : "—"}</b><i>→</i></button>)}</div>}
         <small>MangaDex + automatický webový výběr pro čtení · další katalogy pro přesné názvy a obálky</small>
       </section>
       <section className="manga-home-tabs">
-        <nav><button className={homeTab === "continue" ? "active" : ""} onClick={() => setHomeTab("continue")}>▶ Pokračovat <em>{readingBooks.length}</em></button><button className={homeTab === "completed" ? "active" : ""} onClick={() => setHomeTab("completed")}>✓ Dokončené <em>{completedBooks.length}</em></button><button className={homeTab === "downloads" ? "active" : ""} onClick={() => setHomeTab("downloads")}>⇩ Stažení</button></nav>
+        <nav><button className={homeTab === "continue" ? "active" : ""} onClick={() => setHomeTab("continue")}>▶ Rozečtené <em>{readingBooks.length}</em></button><button className={homeTab === "completed" ? "active" : ""} onClick={() => setHomeTab("completed")}>✓ Dokončené <em>{completedBooks.length}</em></button><button className={homeTab === "downloads" ? "active" : ""} onClick={() => setHomeTab("downloads")}>⇩ Stažení</button></nav>
         {homeTab === "continue" ? <div className={`manga-resume-row ${visibleResumeBooks.length ? "" : "empty"}`}>{renderReadingCards(visibleResumeBooks)}</div> : homeTab === "completed" ? <div className={`manga-resume-row ${visibleCompletedBooks.length ? "" : "empty"}`}>{renderReadingCards(visibleCompletedBooks, true)}</div> : <div className="manga-download-row"><button onClick={() => setView("downloads")}><b>CBZ</b><span>Komiksové čtečky</span></button><button onClick={() => setView("downloads")}><b>EPUB</b><span>E‑book čtečky</span></button><button onClick={() => setView("downloads")}><b>PDF</b><span>Tisk a archiv</span></button><button className="import-format" onClick={() => setImportOpen(true)}><b>＋</b><span>Načíst vlastní listy</span></button></div>}
       </section>
     </div>;
@@ -1503,6 +1510,12 @@ export default function Home() {
     const pages = selected.source === "mangadex" || selected.source === "web" ? fetchedPages ?? [] : selected.localPages ?? Array.from({ length: selectedChapter.pages }, (_, index) => ({ name: `${index + 1}`, url: "" }));
     const displayChapter = selected.source === "mangadex" || selected.source === "web" ? { ...selectedChapter, pages: pages.length } : selectedChapter;
     const visiblePage = pages[readerPage];
+    const fitReaderImage = (image: HTMLImageElement) => {
+      const viewport = readerScrollRef.current;
+      if (!viewport || !image.naturalWidth || !image.naturalHeight) return;
+      const ratio = Math.min(Math.max(120, viewport.clientWidth - 172) / image.naturalWidth, Math.max(120, viewport.clientHeight) / image.naturalHeight);
+      setReaderFitSize({ width: Math.floor(image.naturalWidth * ratio), height: Math.floor(image.naturalHeight * ratio) });
+    };
     return <div className="reader-screen">
       <div className="reader-toolbar"><button onClick={() => setView("detail")}>← <span>Zpět</span></button><div className="reader-title"><div className="reader-title-text"><strong>{selected.title}</strong><small>{selectedChapter.language ? `${selectedChapter.language.toUpperCase()} · ` : ""}Svazek {selectedVolume.number} · Kapitola {selectedChapter.number}: {selectedChapter.title}</small></div>{pages.length > 0 && <div className="reader-page-counter"><strong>{readerPage + 1} / {pages.length}</strong><span>← → listování · ↑ ↓ posouvání stránky</span></div>}</div><div className="reader-controls"><button onClick={() => setReaderScale((value) => Math.max(60, value - 10))} aria-label="Zmenšit" title="Zmenšit stránku">−</button><span>{readerScale}%</span><button onClick={() => setReaderScale((value) => Math.min(160, value + 10))} aria-label="Zvětšit" title="Zvětšit stránku">＋</button><button onClick={() => setReaderScale(100)} aria-label="Přizpůsobit stránku" title="Přizpůsobit oknu">FIT</button>{readerAtEnd && <button className="finish-reader" onClick={() => markCompleted(selected)}>HOTOVO ✓</button>}{selected.source === "mangadex" && <button onClick={() => openExternal(`https://mangadex.org/chapter/${selectedChapter.remoteId}`)}>MD ↗</button>}<button onClick={printPdf} disabled={selected.source === "web" || readerLoading || pages.length === 0 || printing}>{printing ? "PDF…" : "PDF"}</button><button onClick={saveEpub} disabled={selected.source === "web" || exporting || readerLoading || pages.length === 0}>EPUB</button><button className="accent-button" onClick={saveCbz} disabled={selected.source === "web" || exporting || readerLoading || pages.length === 0}>{exporting ? "BALÍM…" : "CBZ"}</button><button onClick={() => setChapterPanel((value) => !value)} aria-label="Přepnout panel kapitol">☰</button></div></div>
       <div className={`reader-body ${chapterPanel ? "with-panel" : ""}`}>
@@ -1512,7 +1525,7 @@ export default function Home() {
           {!readerLoading && selected.source === "web" && pages.length === 0 && <div className="reader-message"><strong>Listy se nepodařilo načíst</strong><span>Zdroj mohl kapitolu dočasně změnit.</span><button onClick={() => openChapter(selected, selectedVolume, selectedChapter)}>Zkusit znovu</button></div>}
           {!readerLoading && visiblePage && <div className="reader-page-stage" style={{ width: `${Math.max(100, readerScale)}%`, height: `${Math.max(100, readerScale)}%` }}>
             <button className="reader-arrow previous" onClick={previousReaderPage} aria-label="Předchozí stránka">‹</button>
-            <div className="reader-single-page" style={{ width: `${Math.min(100, readerScale)}%`, height: `${Math.min(100, readerScale)}%` }}><ComicSheet book={selected} currentChapter={displayChapter} page={readerPage + 1} localPage={visiblePage} /></div>
+            <div className="reader-single-page" style={readerScale === 100 && readerFitSize ? { width: `${readerFitSize.width}px`, height: `${readerFitSize.height}px` } : { width: `${Math.min(100, readerScale)}%`, height: `${Math.min(100, readerScale)}%` }}><ComicSheet book={selected} currentChapter={displayChapter} page={readerPage + 1} localPage={visiblePage} onImageLoad={fitReaderImage} /></div>
             <button className="reader-arrow next" onClick={nextReaderPage} aria-label="Další stránka">›</button>
           </div>}
           {printing && pages.length > 0 && <div className="print-pages" aria-hidden="true">{pages.map((localPage, index) => <ComicSheet key={`print-${selectedChapter.id}-${index}`} book={selected} currentChapter={displayChapter} page={index + 1} localPage={localPage} />)}</div>}
@@ -1534,14 +1547,14 @@ export default function Home() {
 
   const renderDownloads = () => <div className="screen simple-screen"><div className="screen-heading"><div><span className="overline">LOKÁLNÍ EXPORTY</span><h1>Stažené</h1><p>CBZ a EPUB se ukládají přímo. PDF otevře systémový dialog pro tisk a uložení.</p></div></div><div className="format-cards"><article><span>CBZ</span><h2>Pro čtečky komiksů</h2><p>Obrázky ve správném pořadí, zabalené do standardního formátu Comic Book ZIP.</p></article><article><span>EPUB</span><h2>Pro elektronické čtečky</h2><p>Obrázkový EPUB 3 s pevně seřazenými stránkami a navigací.</p></article><article><span>PDF</span><h2>Pro tisk a archiv</h2><p>V čtečce klikněte na PDF a v dialogu vyberte „Uložit jako PDF“.</p></article></div><section className="history"><h2>Historie této relace</h2>{exports.length ? exports.map((item) => <div key={item.id}><span className="file-icon">{item.format}</span><strong>{item.title}</strong><small>{item.when}</small></div>) : <p>Zatím jste nic neexportovali.</p>}</section></div>;
 
-  const renderSettings = () => <div className="screen simple-screen"><div className="screen-heading"><div><span className="overline">NASTAVENÍ A SOUKROMÍ</span><h1>Místní aplikace</h1><p>Manga Reader nevyžaduje účet a neposílá historii čtení na vlastní server.</p></div></div><div className="settings-list"><article><div><strong>Historie čtení</strong><p>Ukládá se pouze v tomto prohlížeči.</p></div><span className="status-pill">LOKÁLNĚ</span></article><article><div><strong>Importované obrázky</strong><p>Zůstanou dostupné do zavření nebo obnovení aplikace.</p></div><span className="status-pill">DOČASNĚ</span></article><article><div><strong>MangaDex</strong><p>Katalog i stránky dostupných kapitol se načítají přímo z oficiálního API.</p></div><span className="status-pill online">KAPITOLY</span></article><article><div><strong>AniList + MyAnimeList</strong><p>Dva rozsáhlé manga katalogy pro alternativní názvy, autory a obálky.</p></div><span className="status-pill anilist">KATALOG</span></article><article><div><strong>Google Books + Open Library</strong><p>Další vydání, knihovní záznamy a legální náhledy, pokud jsou dostupné.</p></div><span className="status-pill googlebooks">NÁHLEDY</span></article><article><div><strong>Lokální export</strong><p>Otevřenou kapitolu lze uložit jako CBZ, EPUB nebo vytisknout do PDF. Používejte jen obsah, který smíte stáhnout.</p></div><span className="status-pill online">AKTIVNÍ</span></article></div></div>;
+  const renderSettings = () => <div className="screen simple-screen"><div className="screen-heading"><div><span className="overline">NASTAVENÍ A SOUKROMÍ</span><h1>Místní aplikace</h1><p>Manga Reader nevyžaduje účet a neposílá historii čtení na vlastní server.</p></div></div><div className="settings-list"><article className="theme-settings"><div><strong>Rezim zobrazeni</strong><p>Volba plati pro celou aplikaci a ulozi se pro priste.</p></div><div className="theme-choice"><button className={theme === "light" ? "active" : ""} onClick={() => { setTheme("light"); safeSetItem("manga-reader-theme", "light"); }}>Denni</button><button className={theme === "dark" ? "active" : ""} onClick={() => { setTheme("dark"); safeSetItem("manga-reader-theme", "dark"); }}>Nocni</button></div></article><article><div><strong>Historie čtení</strong><p>Ukládá se pouze v tomto prohlížeči.</p></div><span className="status-pill">LOKÁLNĚ</span></article><article><div><strong>Importované obrázky</strong><p>Zůstanou dostupné do zavření nebo obnovení aplikace.</p></div><span className="status-pill">DOČASNĚ</span></article><article><div><strong>MangaDex</strong><p>Katalog i stránky dostupných kapitol se načítají přímo z oficiálního API.</p></div><span className="status-pill online">KAPITOLY</span></article><article><div><strong>AniList + MyAnimeList</strong><p>Dva rozsáhlé manga katalogy pro alternativní názvy, autory a obálky.</p></div><span className="status-pill anilist">KATALOG</span></article><article><div><strong>Google Books + Open Library</strong><p>Další vydání, knihovní záznamy a legální náhledy, pokud jsou dostupné.</p></div><span className="status-pill googlebooks">NÁHLEDY</span></article><article><div><strong>Lokální export</strong><p>Otevřenou kapitolu lze uložit jako CBZ, EPUB nebo vytisknout do PDF. Používejte jen obsah, který smíte stáhnout.</p></div><span className="status-pill online">AKTIVNÍ</span></article></div></div>;
 
   return (
     <main className="desktop-app" data-theme={theme}>
       <div className="app-frame">
         {view !== "reader" && view !== "webreader" && view !== "home" && <aside className="app-sidebar"><button className="app-logo" onClick={() => setView("home")}><span><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 14.6 9.4 22.5 12 14.6 14.6 12 22.5 9.4 14.6 1.5 12 9.4 9.4Z" /></svg></span><strong>MANGA</strong><small>READER</small></button><nav><button className={view === "home" ? "active" : ""} onClick={() => setView("home")}><i>⌂</i>Domů</button><button className={view === "library" || view === "detail" ? "active" : ""} onClick={() => setView("library")}><i>▦</i>Knihovna</button><button className={view === "downloads" ? "active" : ""} onClick={() => setView("downloads")}><i>⇩</i>Stažené</button><button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><i>⚙</i>Nastavení</button></nav><div className="sidebar-library"><div><span>MOJE KNIHOVNA</span><button onClick={() => setImportOpen(true)}>＋</button></div>{libraryBooks.slice(0, 4).map((book) => <button key={book.id} onClick={() => chooseBook(book)}><span style={{ background: book.accent }} /><div><strong>{book.title}</strong><small>{progress[book.id] ? `Pozice ${progressLabel(progress[book.id])}` : book.czechTitle}</small></div></button>)}</div><button className="import-side" onClick={() => setImportOpen(true)}><i>＋</i><span><strong>Importovat mangu</strong><small>JPG, PNG nebo WEBP</small></span></button></aside>}
         <section className={`workspace ${view === "reader" || view === "webreader" ? "reader-workspace" : ""} ${view === "home" ? "home-workspace" : ""}`}>
-          {view !== "reader" && view !== "webreader" && view !== "home" && <header className="workspace-header"><label className="global-search"><span>⌕</span><input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); if (view !== "library") setView("library"); }} onKeyDown={searchKey} placeholder="Název mangy česky nebo anglicky…" aria-label="Hledat mangu" /><kbd>ENTER</kbd></label><button className="header-import" onClick={() => setImportOpen(true)}>＋</button></header>}
+          {view !== "reader" && view !== "webreader" && view !== "home" && <header className="workspace-header"><label className="global-search"><span>⌕</span><input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setSourceFilter("all"); if (view !== "library") setView("library"); }} onKeyDown={searchKey} placeholder="Název mangy česky nebo anglicky…" aria-label="Hledat mangu" /><kbd>ENTER</kbd></label><button className="header-import" onClick={() => setImportOpen(true)}>＋</button><button className={`workspace-theme ${theme === "light" ? "to-dark" : "to-light"}`} onClick={toggleTheme} aria-label={theme === "light" ? "Nocni rezim" : "Denni rezim"} title={theme === "light" ? "Nocni rezim" : "Denni rezim"}>{theme === "light" ? "NOC" : "DEN"}</button></header>}
           {view === "home" && renderHome()}{view === "library" && renderLibrary()}{view === "detail" && renderDetail()}{view === "reader" && renderReader()}{view === "webreader" && renderWebReader()}{view === "downloads" && renderDownloads()}{view === "settings" && renderSettings()}
         </section>
       </div>
