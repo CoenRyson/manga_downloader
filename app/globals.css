@@ -729,3 +729,24 @@ button:hover > .book-cover, .shelf-book:hover .book-cover { transform: translate
 .library-screen .screen-heading { margin-right: auto; padding: 16px 18px; border: 1px solid rgba(216,219,226,.86); border-radius: 13px; background: rgba(255,255,255,.84); box-shadow: 0 8px 24px rgba(27,33,48,.06); backdrop-filter: blur(10px); }
 .library-screen .source-tabs, .library-screen .catalogue-filters { border-radius: 10px; background: rgba(255,255,255,.80); backdrop-filter: blur(10px); }
 [data-theme="dark"] .library-screen .screen-heading, [data-theme="dark"] .library-screen .source-tabs, [data-theme="dark"] .library-screen .catalogue-filters { border-color: rgba(255,255,255,.12); background: rgba(26,28,36,.80); }
+
+/* Keep primary headings readable on dark surfaces */
+[data-theme="dark"] .screen h1,
+[data-theme="dark"] .screen-heading h1,
+[data-theme="dark"] .detail-copy h1 { color: var(--ink); }
+
+
+/* Shared theme toggle and readable text across every non-home screen */
+.workspace-header .theme-toggle { flex: 0 0 auto; color: var(--muted); border-color: var(--line); background: var(--white); }
+.workspace-header .theme-toggle:hover { color: var(--ink); background: var(--paper); }
+[data-theme="dark"] .workspace-header .theme-toggle { color: var(--ink); border-color: rgba(255,255,255,.16); background: #1f222c; }
+[data-theme="dark"] .workspace-header .theme-toggle:hover { color: #fff; background: #262a35; }
+[data-theme="dark"] .screen:not(.manga-home) { color: var(--ink); }
+[data-theme="dark"] .screen:not(.manga-home) h1,
+[data-theme="dark"] .screen:not(.manga-home) h2,
+[data-theme="dark"] .screen:not(.manga-home) h3,
+[data-theme="dark"] .history > div strong,
+[data-theme="dark"] .settings-list strong,
+[data-theme="dark"] .format-cards h2 { color: var(--ink); }
+[data-theme="dark"] .screen:not(.manga-home) p { color: var(--muted); }
+[data-theme="dark"] .screen:not(.manga-home) .title-button { color: var(--ink); }
