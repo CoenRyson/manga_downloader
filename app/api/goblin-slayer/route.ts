@@ -1,16 +1,5 @@
 type ChapterLink = { number: number; label: string; url: string };
 
-const volumeRanges = [
-  [1, 1, 4], [2, 5, 9], [3, 10, 15], [4, 16, 21], [5, 22, 26],
-  [6, 27, 30], [7, 31, 35], [8, 36, 40], [9, 41, 44], [10, 45, 51],
-  [11, 52, 57], [12, 58, 64], [13, 65, 72], [14, 73, 79], [15, 80, 87],
-  [16, 88, 95], [17, 96, 103],
-] as const;
-
-function volumeFor(chapter: number) {
-  return volumeRanges.find(([, first, last]) => chapter >= first && chapter < last + 1)?.[0] ?? 18;
-}
-
 export async function GET() {
   try {
     const response = await fetch("https://goblinslayerfree.com/", {
@@ -33,13 +22,13 @@ export async function GET() {
     if (!chapters.length) throw new Error("Seznam kapitol je prázdný");
     const grouped = new Map<number, ChapterLink[]>();
     for (const chapter of chapters) {
-      const volume = volumeFor(chapter.number);
+      const volume = Math.max(1, Math.floor((chapter.number - 1) / 10) + 1);
       grouped.set(volume, [...(grouped.get(volume) ?? []), chapter]);
     }
 
     const volumes = [...grouped.entries()].sort(([a], [b]) => a - b).map(([number, items]) => ({
       number,
-      title: number === 18 ? "Novější kapitoly · svazek zatím nepotvrzen" : `Goblin Slayer · svazek ${number}`,
+      title: `Kapitoly bez potvrzeného svazku · automatická skupina ${number}`,
       chapters: items,
     }));
     return Response.json({ source: "GoblinSlayerFree", chapterCount: chapters.length, volumes });

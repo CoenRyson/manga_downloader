@@ -35,7 +35,13 @@ function scoreTitle(query: string, title: string) {
 }
 
 export async function GET(request: Request) {
-  const query = new URL(request.url).searchParams.get("q")?.trim() ?? "";
+  const params = new URL(request.url).searchParams;
+  const query = params.get("q")?.trim() ?? "";
+  let queryTitles = [query];
+  try {
+    const parsed = JSON.parse(params.get("titles") ?? "[]");
+    if (Array.isArray(parsed)) queryTitles = [...new Set([query, ...parsed].filter((value): value is string => typeof value === "string" && value.trim().length > 1))];
+  } catch { /* fallback na hlavní titul */ }
   if (query.length < 2 || query.length > 120) {
     return Response.json({ error: "Neplatný název mangy." }, { status: 400 });
   }
@@ -54,13 +60,13 @@ export async function GET(request: Request) {
     for (const match of html.matchAll(linkPattern)) {
       const title = plainText(match[2]);
       if (!title) continue;
-      const candidate = { title, url: match[1], score: scoreTitle(query, title) };
+      const candidate = { title, url: match[1], score: Math.max(...queryTitles.map((candidateTitle) => scoreTitle(candidateTitle, title))) };
       const previous = candidates.get(candidate.url);
       if (!previous || candidate.score > previous.score) candidates.set(candidate.url, candidate);
     }
 
     const best = [...candidates.values()].sort((a, b) => b.score - a.score)[0];
-    if (!best || best.score < 30) {
+    if (!best || best.score < 55) {
       return Response.json({ provider: "MangaRead", mode: "search", searchUrl });
     }
     return Response.json({ provider: "MangaRead", mode: "direct", searchUrl, ...best });
