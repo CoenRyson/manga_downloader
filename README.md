@@ -1,100 +1,55 @@
-# vinext-starter
+# Shiori — lokální manga čtečka
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+Jednoduchý full‑stack starter projekt (lokální manga reader) založený na vinextu s volitelnou podporou Cloudflare D1 a Drizzle ORM.
 
-## Prerequisites
+## Popis
 
-- Node.js `>=22.13.0`
+Tento repozitář obsahuje základní šablonu aplikace pro prohlížení lokálních mang/komiksů. Projekt je postavený v TypeScriptu a využívá ekosystém (vinext, Vite, Next kompatibilní prostředí). Můžeš ho použít jako výchozí bod pro vlastní čtečku, přidat D1 databázi přes Cloudflare nebo generovat migrace pomocí Drizzle.
 
-## Quick Start
+## Požadavky
+
+- Node.js >= 22.13.0
+- Doporučené: npm nebo jiný správce balíčků (pnpm/yarn lze použít s odpovídající konfigurací)
+
+## Rychlý start
 
 ```bash
 npm install
-npm run dev
-npm run build
+npm run dev    # spuštění v režimu vývoje
+npm run build  # sestavení aplikace
+npm start      # spuštění produkčního buildu
 ```
 
-This starter does not use `wrangler.jsonc`.
+## Skripty (z package.json)
 
-## Included Shape
+- `dev` — spustí vinext v dev režimu
+- `build` — sestaví aplikaci (`vinext build`)
+- `start` — spustí produkční build (`vinext start`)
+- `test` — sestaví projekt a spustí testy
+- `lint` — spustí ESLint
+- `db:generate` — vygeneruje Drizzle migrace (pokud používáš Drizzle)
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+## Struktura projektu (rychlý přehled)
 
-## Workspace Auth Headers
+- `app/` — hlavní kód webové aplikace (UI, routy)
+- `db/schema.ts` — místo pro definici Drizzle schématu (momentálně může být prázdné)
+- `drizzle.config.ts` — konfigurace Drizzle (používaná pro generování migrací)
+- `examples/d1/` — ukázková integrace s D1 (volitelné)
+- `vite.config.ts` — lokální nastavení vývoje
+- `.openai/hosting.json` — volitelné deklarace vazeb (Sites D1, R2) používané pro lokální simulaci
 
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
+> Poznámka: konkrétní soubory a adresáře se mohou lišit podle větve nebo místních úprav. Pokud něco chybí, zkontroluj aktuální obsah repozitáře.
 
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
+## Autentizační hlavičky a přihlášení
 
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+Projekt může přijímat hlavičky identity (pokud ho hostuje prostředí, které identity injektuje). To usnadňuje implementaci uživatelských účtů a ochranu stránek. Pokud používáš připravené helpery pro přihlášení (např. `app/chatgpt-auth.ts`), najdeš v nich funkce pro kontrolu a vynucení přihlášení.
 
-Treat the full name as optional and fall back to email when it is absent:
+## Užitečné odkazy
 
-```tsx
-import { headers } from "next/headers";
+- vinext: https://github.com/cloudflare/vinext
+- Drizzle D1 guide: https://orm.drizzle.team/docs/get-started/d1-new
 
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
 
-  const displayName = fullName ?? email;
-  // ...
-}
-```
+---
 
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+Pokud chceš, mohu README ještě upravit konkrétně podle tvého projektu (přidat návod, jak nahrávat manga soubory, ukázky konfigurace D1/R2 nebo screenshoty). Napiš, co bys chtěl doplnit.
