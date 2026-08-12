@@ -1,12 +1,4 @@
-type ChapterLink = { number: number; label: string; url: string };
-
-const dandadanRanges = [
-  [1, 1, 5], [2, 6, 14], [3, 15, 23], [4, 24, 32], [5, 33, 40],
-  [6, 41, 49], [7, 50, 58], [8, 59, 67], [9, 68, 76], [10, 77, 85],
-  [11, 86, 93], [12, 94, 102], [13, 103, 111], [14, 112, 120], [15, 121, 129],
-  [16, 130, 138], [17, 139, 147], [18, 148, 156], [19, 157, 165], [20, 166, 174],
-  [21, 175, 183], [22, 184, 192], [23, 193, 201], [24, 202, 210],
-] as const;
+type ChapterLink = { number: number; label: string; title?: string; url: string };
 
 function normalize(value: string) {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -27,19 +19,15 @@ function scoreTitle(query: string, title: string) {
   return Math.round((overlap / Math.max(1, words.size)) * 55);
 }
 
-function groupChapters(chapters: ChapterLink[], provider: "Dandadan Manga Online" | "MangaRead") {
+function groupChapters(chapters: ChapterLink[]) {
   const grouped = new Map<number, ChapterLink[]>();
   for (const chapter of chapters) {
-    const number = provider === "Dandadan Manga Online"
-      ? dandadanRanges.find(([, first, last]) => chapter.number >= first && chapter.number < last + 1)?.[0] ?? 25
-      : Math.max(1, Math.floor((chapter.number - 1) / 10) + 1);
+    const number = Math.max(1, Math.floor((chapter.number - 1) / 10) + 1);
     grouped.set(number, [...(grouped.get(number) ?? []), chapter]);
   }
   return [...grouped.entries()].sort(([a], [b]) => a - b).map(([number, items]) => ({
     number,
-    title: provider === "Dandadan Manga Online"
-      ? number === 25 ? "Novější kapitoly · svazek zatím nepotvrzen" : `Dandadan · svazek ${number}`
-      : `Automatická skupina ${number} · kapitoly ${items[0].label}–${items.at(-1)?.label}`,
+    title: `Kapitoly bez potvrzeného svazku · automatická skupina ${number} · kapitoly ${items[0].label}–${items.at(-1)?.label}`,
     chapters: items,
   }));
 }
@@ -49,7 +37,7 @@ async function dandadan() {
   if (!response.ok) throw new Error(`Dandadan ${response.status}`);
   const html = await response.text();
   const found = new Map<string, ChapterLink>();
-  const pattern = /https:\/\/dandadanmanga-online\.net\/manga\/dandadan-chapter-([0-9]+(?:\.[0-9]+)?)\//gi;
+  const pattern = /https:\/\/dandadanmanga-online\.net\/manga\/dandadan-chapter-([a-p]0|[0-9]+(?:\.[0-9]+)?)\//gi;
   for (const match of html.matchAll(pattern)) {
     const label = match[1];
     const number = Number(label);
@@ -59,6 +47,21 @@ async function dandadan() {
   return { provider: "Dandadan Manga Online" as const, grouping: "volume", seriesUrl: "https://dandadanmanga-online.net/", chapters };
 }
 
+async function berserk() {
+  const response = await fetch("https://readberserk.com/", { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local chapter index" }, signal: AbortSignal.timeout(15000) });
+  if (!response.ok) throw new Error(`Read Berserk ${response.status}`);
+  const html = await response.text();
+  const found = new Map<string, ChapterLink>();
+  const pattern = /https:\/\/readberserk\.com\/chapter\/berserk-chapter-([a-p]0|[0-9]+(?:\.[0-9]+)?)\//gi;
+  for (const match of html.matchAll(pattern)) {
+    const label = match[1].toUpperCase();
+    const special = label.match(/^([A-P])0$/);
+    const number = special ? (special[1].charCodeAt(0) - 64) / 100 : Number(label);
+    if (Number.isFinite(number)) found.set(label, { number, label, title: label === "A0" ? "The Prototype" : undefined, url: `https://readberserk.com/chapter/berserk-chapter-${label.toLowerCase()}/` });
+  }
+  const chapters = [...found.values()].sort((a, b) => a.number - b.number);
+  return { provider: "Read Berserk" as const, grouping: "automatic" as const, seriesUrl: "https://readberserk.com/", chapters };
+}
 async function mangaRead(title: string) {
   const searchUrl = `https://www.mangaread.org/?s=${encodeURIComponent(title)}&post_type=wp-manga`;
   const searchResponse = await fetch(searchUrl, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local source resolver" }, signal: AbortSignal.timeout(15000) });
@@ -92,14 +95,14 @@ export async function GET(request: Request) {
   if (title.length < 2 || title.length > 120) return Response.json({ error: "Neplatný název mangy." }, { status: 400 });
   try {
     const normalized = normalize(title);
-    const result = normalized === "dandadan" || normalized === "dan da dan" ? await dandadan() : await mangaRead(title);
+    const result = normalized === "dandadan" || normalized === "dan da dan" ? await dandadan() : (normalized === "berserk" || normalized.startsWith("berserk ")) ? await berserk() : await mangaRead(title);
     if (!result.chapters.length) throw new Error("Prázdný seznam kapitol");
     return Response.json({
       provider: result.provider,
       grouping: result.grouping,
       seriesUrl: result.seriesUrl,
       chapterCount: result.chapters.length,
-      volumes: groupChapters(result.chapters, result.provider),
+      volumes: groupChapters(result.chapters),
       matchedTitle: "matchedTitle" in result ? result.matchedTitle : title,
       score: "score" in result ? result.score : 100,
     });

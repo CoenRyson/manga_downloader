@@ -1,10 +1,14 @@
 "use client";
 
 import { ChangeEvent, CSSProperties, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { normalizeTitle } from "./reader-utils";
+import { createImagePdf } from "./pdf-utils";
 
-type Chapter = { id: string; number: number; title: string; pages: number; remoteId?: string; language?: string; externalUrl?: string };
-type Volume = { id: string; number: number; title: string; year: string; chapters: Chapter[] };
+type Chapter = { id: string; number: number; label?: string; title: string; pages: number; remoteId?: string; language?: string; externalUrl?: string };
+type Volume = { id: string; number: number; sortKey?: number; displayLabel?: string; confirmed?: boolean; title: string; year: string; chapters: Chapter[] };
 type LocalPage = { name: string; url: string; fallbackUrl?: string };
+
+type ExportedPage = { name: string; data: Uint8Array; extension: string; mediaType: string };
 type CompletionRecord = { chapterCount: number; completedAt: string };
 type Manga = {
   id: string;
@@ -17,6 +21,7 @@ type Manga = {
   year: string;
   rating?: number;
   ratingCount?: number;
+  favourites?: number;
   ratingSource?: string;
   status: string;
   license: string;
@@ -32,7 +37,9 @@ type Manga = {
 
 type View = "home" | "library" | "detail" | "reader" | "webreader" | "downloads" | "settings";
 type ReadingLanguage = "cs" | "en";
-type ExportRecord = { id: string; title: string; format: "CBZ" | "PDF" | "EPUB"; when: string };
+type ExportRecord = { id: string; title: string; format: "CBZ" | "PDF" | "EPUB" | "KINDLE"; when: string };
+type DownloadFormat = "CBZ" | "EPUB" | "PDF" | "KINDLE";
+type DownloadMode = "volumes" | "chapters";
 type RemoteStatus = "idle" | "loading" | "ready" | "partial" | "error";
 type WebReaderSource = {
   title: string;
@@ -284,7 +291,7 @@ function mapAniListItem(item: AniListItem): Manga {
     genres: item.genres?.slice(0, 3) ?? ["Manga"],
     year: item.startDate?.year ? String(item.startDate.year) : "—",
     rating: typeof (item.averageScore ?? item.meanScore) === "number" ? (item.averageScore ?? item.meanScore)! / 10 : undefined,
-    ratingCount: item.favourites,
+    favourites: item.favourites,
     ratingSource: typeof (item.averageScore ?? item.meanScore) === "number" ? "AniList" : undefined,
     status: item.status === "FINISHED" ? "Dokončeno" : item.status === "RELEASING" ? "Vychází" : item.status ?? "Katalog",
     license: "AniList katalog",
@@ -357,7 +364,7 @@ function sourceTitle(source: Manga["source"]) {
 }
 
 function normalizeSearch(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("cs").replace(/[^a-z0-9]+/g, " ").trim();
+  return normalizeTitle(value);
 }
 
 function chapterStats(book: Manga) {
@@ -434,6 +441,36 @@ function progressLabel(value?: string) {
   return `${parsed.language ? `${parsed.language.toUpperCase()} · ` : ""}${parsed.position.filter(Number.isFinite).join(".")}`;
 }
 
+function mangaIdentityMatches(left: Manga, right: Manga) {
+  const leftNames = new Set([left.title, left.czechTitle, ...left.aliases].map(normalizeSearch).filter(Boolean));
+  const rightNames = [right.title, right.czechTitle, ...right.aliases].map(normalizeSearch).filter(Boolean);
+  if (rightNames.some((name) => leftNames.has(name))) return true;
+  const authorsMatch = normalizeSearch(left.author) === normalizeSearch(right.author) && normalizeSearch(left.author).length > 2;
+  const yearsMatch = Boolean(left.year && right.year && left.year === right.year);
+  return rightNames.some((rightName) => [...leftNames].some((leftName) => {
+    const shorter = Math.min(leftName.length, rightName.length);
+    return shorter >= 7 && (leftName.includes(rightName) || rightName.includes(leftName)) && (authorsMatch || yearsMatch);
+  }));
+}
+
+function volumeSortKey(volume: Volume) {
+  return volume.sortKey ?? volume.number;
+}
+
+function volumeDisplayLabel(volume: Volume) {
+  if (volume.displayLabel) return volume.displayLabel;
+  if (volume.number >= 100000) return "BEZ SVAZKU";
+  return `SV. ${String(volume.number).padStart(2, "0")}`;
+}
+
+function chapterDisplayNumber(chapter: Pick<Chapter, "number" | "label">) {
+  return chapter.label ?? String(chapter.number);
+}
+
+function volumeTitle(volume: Volume) {
+  return volume.title || (volume.number >= 100000 ? "Kapitoly bez svazku" : `Svazek ${volume.number}`);
+}
+
 function openExternal(url?: string) {
   if (!url) return;
   try {
@@ -443,7 +480,7 @@ function openExternal(url?: string) {
 }
 
 function webReaderSourceFor(book: Manga): WebReaderSource {
-  const names = [book.title, book.czechTitle].map(normalizeSearch);
+  const names = [book.title, book.czechTitle, ...book.aliases].map(normalizeSearch);
   if (names.some((name) => name === "goblin slayer")) return {
     title: book.title,
     source: "GoblinSlayerFree · přímá shoda · EN",
@@ -512,7 +549,24 @@ function ComicSheet({ book, currentChapter, page, localPage, onImageLoad }: { bo
 }
 
 export default function Home() {
-  const [view, setView] = useState<View>("home");
+  const [view, setViewState] = useState<View>("home");
+  const navigate = (nextView: View) => {
+    setViewState(nextView);
+    if (typeof window !== "undefined" && view !== nextView) {
+      window.history.pushState({ ...window.history.state, mangaReaderView: nextView }, "", window.location.href);
+    }
+  };
+  useEffect(() => {
+    if (!window.history.state?.mangaReaderView) {
+      window.history.replaceState({ ...window.history.state, mangaReaderView: "home" }, "", window.location.href);
+    }
+    const handlePopState = () => {
+      const previousView = window.history.state?.mangaReaderView as View | undefined;
+      if (previousView) setViewState(previousView);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -552,10 +606,13 @@ export default function Home() {
   const [minRating, setMinRating] = useState("");
   const [sortMode, setSortMode] = useState<"relevance" | "rating" | "newest" | "oldest">("relevance");
   const [mangaLanguage, setMangaLanguage] = useState<ReadingLanguage>("cs");
+  const [languageByBook, setLanguageByBook] = useState<Record<string, ReadingLanguage>>({});
   const [readerScale, setReaderScale] = useState(100);
+  const [readerFitMode, setReaderFitMode] = useState<"fit" | "manual">("fit");
   const [readerFitSize, setReaderFitSize] = useState<{ width: number; height: number } | null>(null);
   const [readerPage, setReaderPage] = useState(0);
   const [chapterPanel, setChapterPanel] = useState(true);
+  const [readerPanelTab, setReaderPanelTab] = useState<"contents" | "pages">("contents");
   const [importOpen, setImportOpen] = useState(false);
   const [importTitle, setImportTitle] = useState("");
   const [importFiles, setImportFiles] = useState<File[]>([]);
@@ -563,6 +620,12 @@ export default function Home() {
   const [printing, setPrinting] = useState(false);
   const [notice, setNotice] = useState("");
   const [exports, setExports] = useState<ExportRecord[]>([]);
+  const [downloadOpen, setDownloadOpen] = useState(false);
+  const [downloadFormat, setDownloadFormat] = useState<DownloadFormat>("CBZ");
+  const [downloadMode, setDownloadMode] = useState<DownloadMode>("volumes");
+  const [downloadName, setDownloadName] = useState("");
+  const [downloadChapterIds, setDownloadChapterIds] = useState<string[]>([]);
+  const [downloadVolumeIds, setDownloadVolumeIds] = useState<string[]>([]);
   const [recentIds, setRecentIds] = useState<string[]>([]);
   const [webReader, setWebReader] = useState<WebReaderSource>();
   const [webReaderUrl, setWebReaderUrl] = useState("");
@@ -578,12 +641,14 @@ export default function Home() {
     const storedCompleted = window.localStorage.getItem("shiori-completed");
     const storedRecent = window.localStorage.getItem("shiori-recent");
     const storedCatalogue = window.localStorage.getItem("manga-reader-books");
+    const storedLanguages = window.localStorage.getItem("manga-reader-languages");
     queueMicrotask(() => {
       try { if (storedLibrary) setLibraryIds(JSON.parse(storedLibrary)); } catch { window.localStorage.removeItem("shiori-library"); }
       try { if (storedProgress) setProgress(JSON.parse(storedProgress)); } catch { window.localStorage.removeItem("shiori-progress"); }
       try { if (storedCompleted) setCompleted(JSON.parse(storedCompleted)); } catch { window.localStorage.removeItem("shiori-completed"); }
       try { if (storedRecent) setRecentIds(JSON.parse(storedRecent)); } catch { window.localStorage.removeItem("shiori-recent"); }
       try { if (storedCatalogue) setStoredBooks(JSON.parse(storedCatalogue)); } catch { window.localStorage.removeItem("manga-reader-books"); }
+      try { if (storedLanguages) setLanguageByBook(JSON.parse(storedLanguages)); } catch { window.localStorage.removeItem("manga-reader-languages"); }
     });
   }, []);
 
@@ -720,12 +785,19 @@ export default function Home() {
   }, [query, sourceFilter]);
 
   const catalogue = useMemo(() => {
-    const merged = new Map<string, Manga>();
+    const merged: Manga[] = [];
     for (const book of [...storedBooks, ...discoveryBooks, ...mangaDexBooks, ...localBooks]) {
-      const existing = merged.get(book.id);
-      if (!existing || bookRichness(book) >= bookRichness(existing)) merged.set(book.id, book);
+      const existingIndex = merged.findIndex((existing) => existing.id === book.id || mangaIdentityMatches(existing, book));
+      if (existingIndex < 0) {
+        merged.push(book);
+        continue;
+      }
+      const existing = merged[existingIndex];
+      const winner = bookRichness(book) >= bookRichness(existing) ? book : existing;
+      const other = winner === book ? existing : book;
+      merged[existingIndex] = { ...winner, aliases: [...new Set([...winner.aliases, ...other.aliases, other.title, other.czechTitle])].filter(Boolean), coverUrl: winner.coverUrl ?? other.coverUrl, officialUrl: winner.officialUrl ?? other.officialUrl };
     }
-    return [...merged.values()];
+    return merged;
   }, [localBooks, mangaDexBooks, discoveryBooks, storedBooks]);
   const selected = catalogue.find((book) => book.id === selectedId) ?? emptySelection;
   const selectedVolume = selected.volumes.find((volume) => volume.id === volumeId) ?? selected.volumes[0];
@@ -843,7 +915,7 @@ export default function Home() {
     setQuery("");
     setSuggestionIndex(0);
     setSourceFilter("all");
-    setView("home");
+    navigate("home");
   };
 
   const markCompleted = (book: Manga) => {
@@ -858,7 +930,7 @@ export default function Home() {
   const loadNativeWebBook = async (book: Manga, target: View = "detail") => {
     rememberBook(book);
     setSelectedId(book.id);
-    setView(target);
+    navigate(target);
     if (book.source === "web" && chapterStats(book).external > 0) {
       setVolumeId(book.volumes[0].id);
       setChapterId(book.volumes[0].chapters[0].id);
@@ -874,17 +946,21 @@ export default function Home() {
         chapterCount: number;
         matchedTitle: string;
         score: number;
-        volumes: { number: number; title: string; chapters: { number: number; label: string; url: string }[] }[];
+        volumes: { number: number; title: string; confirmed?: boolean; chapters: { number: number; label: string; title?: string; url: string }[] }[];
       };
       const volumes: Volume[] = payload.volumes.map((volume) => ({
         id: `web-${safeName(payload.provider)}-v-${volume.number}`,
-        number: volume.number,
-        title: volume.title,
+        number: 100000 + volume.number,
+        sortKey: 100000 + volume.number,
+        displayLabel: "BEZ SVAZKU",
+        confirmed: Boolean(volume.confirmed),
+        title: volume.confirmed ? volume.title : volume.title || "Kapitoly bez potvrzeného svazku",
         year: book.year,
         chapters: volume.chapters.map((chapter) => ({
           id: `web-${safeName(payload.provider)}-ch-${chapter.label}`,
           number: chapter.number,
-          title: `Kapitola ${chapter.label}`,
+          label: chapter.label,
+          title: `Kapitola ${chapter.title ?? chapter.label}`,
           pages: 0,
           language: "en",
           externalUrl: chapter.url,
@@ -921,11 +997,12 @@ export default function Home() {
     if (!book.remoteId) return;
     rememberBook(book);
     setSelectedId(book.id);
-    setView(target);
+    navigate(target);
     if (chapterStats(book).total > 0) {
       const defaultLanguage: ReadingLanguage = languageChapterCount(book, "cs") > 0 ? "cs" : "en";
-      const defaultVolumes = volumesInLanguage(book, defaultLanguage);
-      setMangaLanguage(defaultLanguage);
+      const preferredLanguage: ReadingLanguage = languageByBook[book.id] && languageChapterCount(book, languageByBook[book.id]) > 0 ? languageByBook[book.id] : defaultLanguage;
+      const defaultVolumes = volumesInLanguage(book, preferredLanguage);
+      setMangaLanguage(preferredLanguage);
       setVolumeId(defaultVolumes[0]?.id ?? book.volumes[0].id);
       setChapterId(defaultVolumes[0]?.chapters[0]?.id ?? book.volumes[0].chapters[0].id);
       return;
@@ -976,6 +1053,8 @@ export default function Home() {
       const volumes: Volume[] = [...volumeMap.entries()].map(([label, chapterMap], index) => ({
         id: `md-${book.remoteId}-v-${label}`,
         number: label === "Bez svazku" ? 100000 + index : Number.parseFloat(label) || index + 1,
+        sortKey: label === "Bez svazku" ? 100000 + index : Number.parseFloat(label) || index + 1,
+        displayLabel: label === "Bez svazku" ? "BEZ SVAZKU" : undefined,
         title: label === "Bez svazku" ? "Kapitoly bez svazku" : `Volume ${label}`,
         year: book.year,
         chapters: [...chapterMap.values()].sort((a, b) => a.number - b.number),
@@ -991,8 +1070,9 @@ export default function Home() {
         return exists ? current.map((item) => item.id === loaded.id ? loaded : item) : [loaded, ...current];
       });
       const defaultLanguage: ReadingLanguage = languageChapterCount(loaded, "cs") > 0 ? "cs" : "en";
-      const defaultVolumes = volumesInLanguage(loaded, defaultLanguage);
-      setMangaLanguage(defaultLanguage);
+      const preferredLanguage: ReadingLanguage = languageByBook[book.id] && languageChapterCount(loaded, languageByBook[book.id]) > 0 ? languageByBook[book.id] : defaultLanguage;
+      const defaultVolumes = volumesInLanguage(loaded, preferredLanguage);
+      setMangaLanguage(preferredLanguage);
       setVolumeId(defaultVolumes[0]?.id ?? loaded.volumes[0].id);
       setChapterId(defaultVolumes[0]?.chapters[0]?.id ?? loaded.volumes[0].chapters[0].id);
       persistBook(loaded);
@@ -1007,7 +1087,7 @@ export default function Home() {
   const loadGoblinSlayerBook = async (book: Manga, target: View = "detail") => {
     rememberBook(book);
     setSelectedId(book.id);
-    setView(target);
+    navigate(target);
     if (book.source === "web" && chapterStats(book).external > 0) {
       setVolumeId(book.volumes[0].id);
       setChapterId(book.volumes[0].chapters[0].id);
@@ -1019,17 +1099,21 @@ export default function Home() {
       if (!response.ok) throw new Error(`Goblin Slayer index ${response.status}`);
       const payload = await response.json() as {
         chapterCount: number;
-        volumes: { number: number; title: string; chapters: { number: number; label: string; url: string }[] }[];
+        volumes: { number: number; title: string; confirmed?: boolean; chapters: { number: number; label: string; title?: string; url: string }[] }[];
       };
       const volumes: Volume[] = payload.volumes.map((volume) => ({
         id: `web-gs-v-${volume.number}`,
-        number: volume.number,
-        title: volume.title,
+        number: 100000 + volume.number,
+        sortKey: 100000 + volume.number,
+        displayLabel: "BEZ SVAZKU",
+        confirmed: Boolean(volume.confirmed),
+        title: volume.title || "Kapitoly bez potvrzeného svazku",
         year: book.year,
         chapters: volume.chapters.map((chapter) => ({
           id: `web-gs-ch-${chapter.label}`,
           number: chapter.number,
-          title: `Kapitola ${chapter.label}`,
+          label: chapter.label,
+          title: `Kapitola ${chapter.title ?? chapter.label}`,
           pages: 0,
           language: "en",
           externalUrl: chapter.url,
@@ -1062,11 +1146,15 @@ export default function Home() {
     const names = [selected.title, selected.czechTitle, ...selected.aliases].map(normalizeSearch);
     const isGoblinSlayer = names.includes("goblin slayer");
     const isDandadan = names.includes("dandadan") || names.includes("dan da dan");
+    const isBerserk = names.some((name) => name === "berserk" || name.startsWith("berserk "));
     const alreadyLoaded = selected.source === "web" && chapterStats(selected).external > 0;
     if (view === "detail" && isGoblinSlayer && !alreadyLoaded && !remoteBookLoading) {
       void loadGoblinSlayerBook(selected, "detail");
     }
     if (view === "detail" && isDandadan && !alreadyLoaded && !remoteBookLoading) {
+      void loadNativeWebBook(selected, "detail");
+    }
+    if (view === "detail" && isBerserk && !alreadyLoaded && !remoteBookLoading) {
       void loadNativeWebBook(selected, "detail");
     }
   }, [view, selected.id, selected.source]);
@@ -1077,7 +1165,7 @@ export default function Home() {
       void loadGoblinSlayerBook(book, target);
       return;
     }
-    if (names.includes("dandadan") || names.includes("dan da dan")) {
+    if (names.includes("dandadan") || names.includes("dan da dan") || names.some((name) => name === "berserk" || name.startsWith("berserk "))) {
       void loadNativeWebBook(book, target);
       return;
     }
@@ -1090,21 +1178,31 @@ export default function Home() {
       return;
     }
     rememberBook(book);
-    setSelectedId(book.id); setVolumeId(book.volumes[0].id); setChapterId(book.volumes[0].chapters[0].id); setView(target);
+    setSelectedId(book.id); setVolumeId(book.volumes[0].id); setChapterId(book.volumes[0].chapters[0].id); navigate(target);
   };
 
   const openChapter = async (book: Manga, volume: Volume, item: Chapter) => {
     const loadId = ++chapterLoadIdRef.current;
     setNotice("");
     setReaderScale(100);
+    setReaderFitMode("fit");
     setReaderFitSize(null);
+    setReaderPanelTab("contents");
     setChapterPanel(false);
+    if (item.language === "cs" || item.language === "en") {
+      setMangaLanguage(item.language);
+      setLanguageByBook((current) => {
+        const next = { ...current, [book.id]: item.language as ReadingLanguage };
+        safeSetItem("manga-reader-languages", JSON.stringify(next));
+        return next;
+      });
+    }
     persistBook(book);
     if (item.externalUrl && book.source === "web") {
-      setSelectedId(book.id); setVolumeId(volume.id); setChapterId(item.id); setView("reader");
+      setSelectedId(book.id); setVolumeId(volume.id); setChapterId(item.id); navigate("reader");
       if (item.language === "cs" || item.language === "en") setMangaLanguage(item.language);
       setReaderPage(0);
-      const next = { ...progress, [book.id]: `${item.language === "cs" || item.language === "en" ? `${item.language}|` : ""}${volume.number}.${item.number}` };
+      const next = { ...progress, [book.id]: `${item.language === "cs" || item.language === "en" ? `${item.language}|` : ""}${volumeSortKey(volume)}.${item.number}` };
       setProgress(next); safeSetItem("shiori-progress", JSON.stringify(next));
       if (!remotePages[item.id]) {
         setReaderLoading(true);
@@ -1141,14 +1239,14 @@ export default function Home() {
         };
         setWebReader(embedded);
         setWebReaderUrl(embedded.startUrl);
-        setView("webreader");
+        navigate("webreader");
       } catch { setNotice("Externí kapitola nemá platný webový odkaz."); }
       return item.pages;
     }
-    setSelectedId(book.id); setVolumeId(volume.id); setChapterId(item.id); setView("reader");
+    setSelectedId(book.id); setVolumeId(volume.id); setChapterId(item.id); navigate("reader");
     if (item.language === "cs" || item.language === "en") setMangaLanguage(item.language);
     setReaderPage(0);
-    const next = { ...progress, [book.id]: `${item.language === "cs" || item.language === "en" ? `${item.language}|` : ""}${volume.number}.${item.number}` };
+    const next = { ...progress, [book.id]: `${item.language === "cs" || item.language === "en" ? `${item.language}|` : ""}${volumeSortKey(volume)}.${item.number}` };
     setProgress(next); safeSetItem("shiori-progress", JSON.stringify(next));
     if (book.source === "mangadex" && item.remoteId && !remotePages[item.remoteId]) {
       setReaderLoading(true);
@@ -1183,7 +1281,7 @@ export default function Home() {
     ? remotePages[readerRemoteKey]?.length ?? selectedChapter.pages
     : selected.localPages?.length ?? selectedChapter.pages;
   const readerLanguage = selected.source === "mangadex" && (selectedChapter.language === "cs" || selectedChapter.language === "en") ? selectedChapter.language : undefined;
-  const readerNavigationVolumes = readerLanguage ? volumesInLanguage(selected, readerLanguage) : selected.volumes;
+  const readerNavigationVolumes = (readerLanguage ? volumesInLanguage(selected, readerLanguage) : selected.volumes).slice().sort((a, b) => volumeSortKey(a) - volumeSortKey(b));
   const readerVolumeIndex = readerNavigationVolumes.findIndex((volume) => volume.id === selectedVolume.id);
   const readerNavigationVolume = readerNavigationVolumes.find((volume) => volume.id === selectedVolume.id) ?? readerNavigationVolumes[0];
   const readerChapterIndex = readerNavigationVolume.chapters.findIndex((chapter) => chapter.id === selectedChapter.id);
@@ -1238,7 +1336,7 @@ export default function Home() {
         event.preventDefault();
         readerScrollRef.current?.scrollBy({ top: event.key === "ArrowDown" ? 120 : -120, behavior: "smooth" });
       }
-      if (event.key === "Escape") setView("detail");
+      if (event.key === "Escape") navigate("detail");
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
@@ -1248,7 +1346,7 @@ export default function Home() {
     if (view !== "reader") return;
     queueMicrotask(() => setProgress((current) => {
       const languagePrefix = selectedChapter.language === "cs" || selectedChapter.language === "en" ? `${selectedChapter.language}|` : "";
-      const next = { ...current, [selected.id]: `${languagePrefix}${selectedVolume.number}.${selectedChapter.number}.${readerPage + 1}` };
+      const next = { ...current, [selected.id]: `${languagePrefix}${volumeSortKey(selectedVolume)}.${selectedChapter.number}.${readerPage + 1}` };
       safeSetItem("shiori-progress", JSON.stringify(next));
       return next;
     }));
@@ -1260,10 +1358,26 @@ export default function Home() {
       const viewport = readerScrollRef.current;
       if (!viewport) return;
       viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2);
-      if (readerPage === 0 || readerScale !== 100) viewport.scrollTop = 0;
+      if (readerPage === 0 || readerFitMode !== "fit") viewport.scrollTop = 0;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [view, readerPage, readerScale, readerLoading, chapterPanel]);
+  }, [view, readerPage, readerScale, readerFitMode, readerLoading, chapterPanel]);
+
+  useEffect(() => {
+    if (view !== "reader" || readerFitMode !== "fit") return;
+    const recalculate = () => {
+      const viewport = readerScrollRef.current;
+      const image = viewport?.querySelector<HTMLImageElement>(".reader-single-page img");
+      if (!viewport || !image?.naturalWidth || !image.naturalHeight) return;
+      const availableWidth = Math.max(120, viewport.clientWidth - 112);
+      const availableHeight = Math.max(120, viewport.clientHeight - 24);
+      const ratio = Math.min(availableWidth / image.naturalWidth, availableHeight / image.naturalHeight);
+      setReaderFitSize({ width: Math.floor(image.naturalWidth * ratio), height: Math.floor(image.naturalHeight * ratio) });
+    };
+    const frame = window.requestAnimationFrame(recalculate);
+    window.addEventListener("resize", recalculate);
+    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("resize", recalculate); };
+  }, [view, readerPage, selected.id, selectedChapter.id, chapterPanel, readerFitMode]);
 
   useEffect(() => {
     if (readerPageCount > 0 && readerPage >= readerPageCount) queueMicrotask(() => setReaderPage(readerPageCount - 1));
@@ -1306,14 +1420,62 @@ export default function Home() {
     setImportOpen(false); setImportTitle(""); setImportFiles([]); chooseBook(book); setNotice("Manga byla načtena lokálně");
   };
 
-  const currentExportPages = () => selected.localPages ?? (selectedChapter.remoteId ? remotePages[selectedChapter.remoteId] ?? [] : []);
+  const fetchChapterExportPages = async (chapter: Chapter) => {
+    if (selected.source === "local") return selected.localPages ?? [];
+    if (selected.source === "web" && chapter.externalUrl) {
+      const response = await fetch(`/api/native-source/chapter?url=${encodeURIComponent(chapter.externalUrl)}`);
+      if (!response.ok) throw new Error(`Web chapter ${response.status}`);
+      const payload = await response.json() as { images: string[] };
+      return payload.images.map((url, index) => ({ name: `Stránka ${index + 1}`, url }));
+    }
+    if (selected.source === "mangadex" && chapter.remoteId) {
+      const response = await fetch(`/api/mangadex-chapter?id=${encodeURIComponent(chapter.remoteId)}`);
+      if (!response.ok) throw new Error(`MangaDex chapter ${response.status}`);
+      const payload = await response.json() as { baseUrl: string; chapter: { hash: string; data: string[]; dataSaver: string[] } };
+      const files = payload.chapter.dataSaver.length ? payload.chapter.dataSaver : payload.chapter.data;
+      const full = payload.chapter.dataSaver.length ? "data-saver" : "data";
+      return files.map((file, index) => ({
+        name: payload.chapter.data[index] ?? file,
+        url: `/api/mangadex-image?url=${encodeURIComponent(`${payload.baseUrl}/${full}/${payload.chapter.hash}/${file}`)}`,
+      }));
+    }
+    return [];
+  };
+
+  const collectCompleteExportPages = async (chapterIds?: string[]) => {
+    if (selected.source === "local") return collectExportPages();
+    const selectedIds = chapterIds?.length ? new Set(chapterIds) : undefined;
+    const chapters = selected.volumes.flatMap((volume) => volume.chapters).filter((chapter) => !selectedIds || selectedIds.has(chapter.id)).sort((a, b) => a.number - b.number);
+    const result: ExportedPage[] = [];
+    for (const chapter of chapters) {
+      const refs = await fetchChapterExportPages(chapter);
+      const pages = await Promise.all(refs.map(async (page, index) => {
+        const exportUrl = /^https:\/\//i.test(page.url) ? `/api/native-source/image?url=${encodeURIComponent(page.url)}` : page.url;
+        const response = await fetch(exportUrl, { headers: { Accept: "image/*" }, referrerPolicy: "no-referrer" });
+        if (!response.ok) throw new Error(`Kapitola ${chapterDisplayNumber(chapter)}, stránka ${index + 1}: ${response.status}`);
+        const extensionFromName = page.name.split(".").pop()?.toLowerCase();
+        const contentType = response.headers.get("content-type")?.split(";")[0] ?? "";
+        const extension = extensionFromName && ["jpg", "jpeg", "png", "webp"].includes(extensionFromName) ? extensionFromName : contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
+        const mediaType = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg";
+        return { name: `chapter-${chapterDisplayNumber(chapter)}-${String(index + 1).padStart(3, "0")}.${extension}`, data: new Uint8Array(await response.arrayBuffer()), extension, mediaType };
+      }));
+      result.push(...pages);
+    }
+    return result;
+  };
+  const currentExportPages = () => {
+    if (selected.localPages) return selected.localPages;
+    const remoteKey = selected.source === "web" ? selectedChapter.id : selectedChapter.remoteId;
+    return remoteKey ? remotePages[remoteKey] ?? [] : [];
+  };
 
   const collectExportPages = async () => {
     const pageRefs = currentExportPages();
     if (pageRefs.length === 0) throw new Error("Kapitola zatím nemá načtené stránky");
+    const exportImageUrl = (url: string) => /^https:\/\//i.test(url) ? `/api/native-source/image?url=${encodeURIComponent(url)}` : url;
     return Promise.all(pageRefs.map(async (page, index) => {
-      let response = await fetch(page.url, { headers: { Accept: "image/*" }, referrerPolicy: "no-referrer" });
-      if (!response.ok && page.fallbackUrl) response = await fetch(page.fallbackUrl, { headers: { Accept: "image/*" }, referrerPolicy: "no-referrer" });
+      let response = await fetch(exportImageUrl(page.url), { headers: { Accept: "image/*" }, referrerPolicy: "no-referrer" });
+      if (!response.ok && page.fallbackUrl) response = await fetch(exportImageUrl(page.fallbackUrl), { headers: { Accept: "image/*" }, referrerPolicy: "no-referrer" });
       if (!response.ok) throw new Error(`Stránka ${index + 1}: ${response.status}`);
       const extensionFromName = page.name.split(".").pop()?.toLowerCase();
       const contentType = response.headers.get("content-type")?.split(";")[0] ?? "";
@@ -1321,37 +1483,38 @@ export default function Home() {
         ? extensionFromName
         : contentType === "image/png" ? "png" : contentType === "image/webp" ? "webp" : "jpg";
       const mediaType = extension === "png" ? "image/png" : extension === "webp" ? "image/webp" : "image/jpeg";
-      return { data: new Uint8Array(await response.arrayBuffer()), extension, mediaType };
+      return { name: page.name, data: new Uint8Array(await response.arrayBuffer()), extension, mediaType };
     }));
   };
 
-  const saveCbz = async () => {
+  const saveCbz = async (pageOverride?: ExportedPage[], complete = false, exportTitle = selected.title, exportLabel = "") => {
     setExporting(true);
     setNotice("Stahuji stránky a připravuji CBZ…");
     try {
-      const pages = await collectExportPages();
+      const pages = pageOverride ?? await collectExportPages();
       const encoder = new TextEncoder();
       const archive = zipStore([
         ...pages.map((page, index) => ({ name: `${String(index + 1).padStart(3, "0")}.${page.extension}`, data: page.data })),
-        { name: "README.txt", data: encoder.encode(`${selected.title}\n${selected.czechTitle}\n\n${selected.license}\nKapitola ${selectedChapter.number}: ${selectedChapter.title}\n\nExportováno lokálně v aplikaci Manga Reader.`) },
+        { name: "README.txt", data: encoder.encode(`${selected.title}\n${selected.czechTitle}\n\n${selected.license}\nKapitola ${chapterDisplayNumber(selectedChapter)}: ${selectedChapter.title}\n\nExportováno lokálně v aplikaci Manga Reader.`) },
       ]);
       const blob = new Blob([archive.buffer as ArrayBuffer], { type: "application/vnd.comicbook+zip" });
       const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
-      anchor.href = url; anchor.download = `${safeName(selected.title)}-chapter-${selectedChapter.number}.cbz`; anchor.click();
+      const fileSuffix = exportLabel ? safeName(exportLabel) : complete ? "complete" : `chapter-${chapterDisplayNumber(selectedChapter)}`;
+      anchor.href = url; anchor.download = `${safeName(exportTitle)}-${fileSuffix}.cbz`; anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setExports((current) => [{ id: `${Date.now()}`, title: `${selected.title} · kap. ${selectedChapter.number}`, format: "CBZ", when: "Právě teď" }, ...current]);
+      setExports((current) => [{ id: `${Date.now()}`, title: `${selected.title} · kap. ${chapterDisplayNumber(selectedChapter)}`, format: "CBZ", when: "Právě teď" }, ...current]);
       setNotice("CBZ bylo uloženo do Stažených souborů");
     } catch { setNotice("CBZ se nepodařilo vytvořit. Zdroj mohl odmítnout stažení obrázků."); }
     finally { setExporting(false); }
   };
 
-  const saveEpub = async () => {
+  const saveEpub = async (kindle = false, pageOverride?: ExportedPage[], complete = false, exportTitle = selected.title, exportLabel = "") => {
     setExporting(true);
     setNotice("Stahuji stránky a připravuji EPUB…");
     try {
-      const pages = await collectExportPages();
+      const pages = pageOverride ?? await collectExportPages();
       const encoder = new TextEncoder();
-      const title = escapeXml(`${selected.title} — ${selectedChapter.title}`);
+      const title = escapeXml(complete ? exportTitle : `${exportTitle} — ${selectedChapter.title}`);
       const author = escapeXml(selected.author);
       const pageFiles = pages.map((page, index) => ({ ...page, fileName: `page-${String(index + 1).padStart(3, "0")}.${page.extension}` }));
       const manifestImages = pageFiles.map((page, index) => `<item id="img${index + 1}" href="images/${page.fileName}" media-type="${page.mediaType}"${index === 0 ? ' properties="cover-image"' : ""}/>`).join("");
@@ -1361,7 +1524,7 @@ export default function Home() {
       const files: { name: string; data: Uint8Array }[] = [
         { name: "mimetype", data: encoder.encode("application/epub+zip") },
         { name: "META-INF/container.xml", data: encoder.encode('<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>') },
-        { name: "OEBPS/content.opf", data: encoder.encode(`<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">shiori-${Date.now()}</dc:identifier><dc:title>${title}</dc:title><dc:creator>${author}</dc:creator><dc:language>cs</dc:language><meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${manifestImages}${manifestPages}</manifest><spine page-progression-direction="rtl">${spine}</spine></package>`) },
+        { name: "OEBPS/content.opf", data: encoder.encode(`<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="book-id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="book-id">shiori-${Date.now()}</dc:identifier><dc:title>${title}</dc:title><dc:creator>${author}</dc:creator><dc:language>${selectedChapter.language ?? "cs"}</dc:language><meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}</meta><meta name="cover" content="img1"/><meta property="rendition:layout">pre-paginated</meta><meta property="rendition:orientation">auto</meta><meta property="rendition:spread">both</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>${manifestImages}${manifestPages}</manifest><spine page-progression-direction="rtl">${spine}</spine></package>`) },
         { name: "OEBPS/nav.xhtml", data: encoder.encode(`<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>${title}</title></head><body><nav epub:type="toc"><h1>${title}</h1><ol>${navItems}</ol></nav></body></html>`) },
         ...pageFiles.map((page, index) => ({ name: `OEBPS/pages/p${index + 1}.xhtml`, data: encoder.encode(`<?xml version="1.0" encoding="UTF-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>Stránka ${index + 1}</title><meta name="viewport" content="width=device-width,height=device-height"/><style>html,body{margin:0;padding:0;background:#111;height:100%}img{display:block;width:100%;height:100%;object-fit:contain}</style></head><body><img src="../images/${page.fileName}" alt="Stránka ${index + 1}"/></body></html>`) })),
         ...pageFiles.map((page) => ({ name: `OEBPS/images/${page.fileName}`, data: page.data })),
@@ -1369,25 +1532,78 @@ export default function Home() {
       const archive = zipStore(files);
       const blob = new Blob([archive.buffer as ArrayBuffer], { type: "application/epub+zip" });
       const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
-      anchor.href = url; anchor.download = `${safeName(selected.title)}-chapter-${selectedChapter.number}.epub`; anchor.click();
+      const fileSuffix = exportLabel ? safeName(exportLabel) : complete ? "complete" : `chapter-${chapterDisplayNumber(selectedChapter).padStart(3, "0")}`;
+      anchor.href = url; anchor.download = `${safeName(exportTitle)}-${fileSuffix}${kindle ? "-kindle" : ""}.epub`; anchor.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setExports((current) => [{ id: `${Date.now()}`, title: `${selected.title} · kap. ${selectedChapter.number}`, format: "EPUB", when: "Právě teď" }, ...current]);
+      setExports((current) => [{ id: `${Date.now()}`, title: `${selected.title} · kap. ${chapterDisplayNumber(selectedChapter)}`, format: kindle ? "KINDLE" : "EPUB", when: "Právě teď" }, ...current]);
       setNotice("EPUB bylo uloženo do Stažených souborů");
     } catch { setNotice("EPUB se nepodařilo vytvořit. Zdroj mohl odmítnout stažení obrázků."); }
     finally { setExporting(false); }
   };
 
-  const printPdf = () => {
+  const printPdf = async (pageOverride?: ExportedPage[], complete = false, exportTitle = selected.title, exportLabel = "") => {
     if (currentExportPages().length === 0) { setNotice("Nejdřív načtěte stránky kapitoly"); return; }
     setPrinting(true);
-    setNotice("Připravuji všechny stránky pro PDF…");
-    window.setTimeout(async () => {
-      const images = [...document.querySelectorAll<HTMLImageElement>(".print-pages img")];
-      await Promise.all(images.map((image) => image.decode().catch(() => undefined)));
-      setExports((current) => [{ id: `${Date.now()}`, title: `${selected.title} · kap. ${selectedChapter.number}`, format: "PDF", when: "Právě teď" }, ...current]);
-      window.print();
+    setNotice("Připravuji PDF ke stažení…");
+    try {
+      const pdf = await createImagePdf(pageOverride ?? await collectExportPages());
+      const url = URL.createObjectURL(new Blob([pdf], { type: "application/pdf" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      const fileSuffix = exportLabel ? safeName(exportLabel) : complete ? "complete" : `chapter-${chapterDisplayNumber(selectedChapter)}`;
+      anchor.download = `${safeName(exportTitle)}-${fileSuffix}.pdf`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setExports((current) => [{ id: `${Date.now()}`, title: `${selected.title} · kap. ${chapterDisplayNumber(selectedChapter)}`, format: "PDF", when: "Právě teď" }, ...current]);
+      setNotice("PDF bylo staženo do Stažených souborů");
+    } catch {
+      setNotice("PDF se nepodařilo vytvořit. Zdroj mohl odmítnout stažení obrázků.");
+    } finally {
       setPrinting(false);
-    }, 100);
+    }
+  };
+
+  const exportVolumeNumber = (volume: Volume) => {
+    if (volume.number < 100000 && Number.isFinite(volume.number)) return Math.max(1, Math.trunc(volume.number));
+    const ordered = selected.volumes.slice().sort((left, right) => volumeSortKey(left) - volumeSortKey(right));
+    return Math.max(1, ordered.findIndex((item) => item.id === volume.id) + 1);
+  };
+  const exportVolumeLabel = (volume: Volume) => `volume-${String(exportVolumeNumber(volume)).padStart(2, "0")}`;
+
+  const downloadSelected = async (format: DownloadFormat, groups: { ids: string[]; label: string }[], exportTitle: string) => {
+    const count = groups.length;
+    if (selected.source === "mangadex" && count === 0) { setNotice("Nejdřív načtěte kapitoly MangaDexu"); return; }
+    setExporting(true);
+    setNotice(`Připravuji kompletní mangu (${count} kapitol)…`);
+    try {
+      for (const [index, group] of groups.entries()) {
+        const volumeForGroup = group.label.startsWith("volume-") ? selected.volumes.find((volume) => group.ids.some((id) => volume.chapters.some((chapter) => chapter.id === id))) : undefined;
+        const groupLabel = volumeForGroup ? exportVolumeLabel(volumeForGroup) : group.label;
+        setNotice(`Stahuji soubor ${index + 1}/${count}: ${groupLabel}…`);
+        const pages = await collectCompleteExportPages(group.ids);
+      if (!pages.length) throw new Error("Kompletní titul nemá dostupné stránky");
+      setExporting(false);
+        if (format === "CBZ") await saveCbz(pages, true, exportTitle, groupLabel);
+        else if (format === "PDF") await printPdf(pages, true, exportTitle, groupLabel);
+        else await saveEpub(format === "KINDLE", pages, true, exportTitle, groupLabel);
+      }
+    } catch {
+      setExporting(false);
+      setNotice("Kompletní mangu se nepodařilo stáhnout. Některá kapitola nemá dostupné obrázky.");
+    }
+  };
+
+  const downloadComplete = async (format: DownloadFormat, chapterIds: string[], exportTitle: string) => {
+    const groups = downloadMode === "volumes"
+      ? downloadVolumeIds.map((id) => {
+        const volume = selected.volumes.find((item) => item.id === id);
+        return { ids: volume?.chapters.filter((chapter) => chapter.pages > 0 || chapter.externalUrl).map((chapter) => chapter.id) ?? [], label: volume ? exportVolumeLabel(volume) : id };
+      })
+      : chapterIds.map((id) => {
+        const chapter = selected.volumes.flatMap((volume) => volume.chapters).find((item) => item.id === id);
+        return { ids: [id], label: chapter ? `chapter-${chapterDisplayNumber(chapter)}` : id };
+      });
+    return downloadSelected(format, groups, exportTitle);
   };
 
   const resumeReading = (book: Manga) => {
@@ -1397,7 +1613,7 @@ export default function Home() {
     }
     const saved = parseProgress(progress[book.id]);
     const candidateVolumes = saved.language ? volumesInLanguage(book, saved.language) : book.volumes;
-    const volume = candidateVolumes.find((item) => item.number === saved.position[0]) ?? candidateVolumes[0] ?? book.volumes[0];
+    const volume = candidateVolumes.find((item) => volumeSortKey(item) === saved.position[0] || item.number === saved.position[0]) ?? candidateVolumes[0] ?? book.volumes[0];
     const item = volume.chapters.find((entry) => entry.number === saved.position[1] && (!saved.language || entry.language === saved.language)) ?? volume.chapters[0];
     if (saved.language) setMangaLanguage(saved.language);
     void openChapter(book, volume, item).then(() => setReaderPage(Math.max(0, (saved.position[2] ?? 1) - 1)));
@@ -1409,7 +1625,7 @@ export default function Home() {
     const renderReadingCards = (books: Manga[], completedView = false) => books.length ? books.map((book) => <article className="manga-resume-card" key={book.id}><button className="resume-open" onClick={() => completedView ? chooseBook(book) : resumeReading(book)}><Cover book={book} compact /><span><small>{completedView ? "DOKONČENO" : `POZICE ${progressLabel(progress[book.id])}`}</small><strong>{book.title}</strong><i>{book.czechTitle}</i></span><b>{completedView ? "✓" : "→"}</b></button>{!completedView && <button className="resume-remove" onClick={() => removeFromContinue(book)} aria-label={`Odebrat ${book.title} z pokračování`}>×</button>}</article>) : <div className="manga-empty-library"><span>{completedView ? "ZATÍM NIC DOKONČENÉHO" : "ZATÍM NIC ROZČTENÉHO"}</span><strong>{completedView ? "Po poslední kapitole můžete mangu označit jako dokončenou." : "Každá manga se po otevření první kapitoly objeví zde."}</strong></div>;
     return <div className="screen manga-home">
       <div className="manga-home-shade" />
-      <header className="manga-home-brand"><button onClick={goHome}><i><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 1.5 14.6 9.4 22.5 12 14.6 14.6 12 22.5 9.4 14.6 1.5 12 9.4 9.4Z" /></svg></i><span><strong>MANGA READER</strong><small>LOCAL EDITION</small></span></button><div className="manga-home-actions"><nav className="home-nav" aria-label="Hlavní navigace"><button className="active" onClick={goHome}>Domů</button><button onClick={() => setView("library")}>Knihovna</button><button onClick={() => setView("downloads")}>Stažené</button><button onClick={() => setView("settings")}>Nastavení</button></nav><button className={`theme-toggle ${theme === "light" ? "to-dark" : "to-light"}`} onClick={toggleTheme} aria-label={theme === "light" ? "Přepnout na tmavý režim" : "Přepnout na světlý režim"} title={theme === "light" ? "Tmavý režim" : "Světlý režim"}>{theme === "light" ? "☾" : "☀"}</button><button className="manga-home-import" onClick={() => setImportOpen(true)}>＋ Vlastní manga</button></div></header>
+      <header className="manga-home-brand"><button onClick={goHome}><i><svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 1.5 14.6 9.4 22.5 12 14.6 14.6 12 22.5 9.4 14.6 1.5 12 9.4 9.4Z" /></svg></i><span><strong>MANGA READER</strong><small>LOCAL EDITION</small></span></button><div className="manga-home-actions"><nav className="home-nav" aria-label="Hlavní navigace"><button className="active" onClick={goHome}>Domů</button><button onClick={() => navigate("library")}>Knihovna</button><button onClick={() => navigate("downloads")}>Stažené</button><button onClick={() => navigate("settings")}>Nastavení</button></nav><button className={`theme-toggle ${theme === "light" ? "to-dark" : "to-light"}`} onClick={toggleTheme} aria-label={theme === "light" ? "Přepnout na tmavý režim" : "Přepnout na světlý režim"} title={theme === "light" ? "Tmavý režim" : "Světlý režim"}>{theme === "light" ? "☾" : "☀"}</button><button className="manga-home-import" onClick={() => setImportOpen(true)}>＋ Vlastní manga</button></div></header>
       <section className="manga-search-core">
         <span>NAJDI. OTEVŘI. ČTI.</span>
         <label><i>⌕</i><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
@@ -1417,17 +1633,17 @@ export default function Home() {
           if (event.key === "ArrowUp") { event.preventDefault(); if (suggestions.length) setSuggestionIndex((current) => Math.max(current - 1, 0)); return; }
           if (event.key === "Enter") {
             const book = suggestions[activeSuggestionIndex];
-            if (book) { setQuery(book.title); chooseBook(book); } else { setSourceFilter("all"); setView("library"); }
+            if (book) { setQuery(book.title); chooseBook(book); } else { setSourceFilter("all"); navigate("library"); }
             return;
           }
           if (event.key === "Escape") setQuery("");
-        }} placeholder="Název mangy česky, anglicky nebo japonsky…" autoComplete="off" autoFocus /><button onClick={() => { setSourceFilter("all"); setView("library"); }}>HLEDAT</button></label>
+        }} placeholder="Název mangy česky, anglicky nebo japonsky…" autoComplete="off" autoFocus /><button onClick={() => { setSourceFilter("all"); navigate("library"); }}>HLEDAT</button></label>
         {suggestions.length > 0 && <div className="search-suggestions" role="listbox" aria-label="Návrhy mang">{suggestions.map((book, index) => <button key={book.id} type="button" role="option" aria-selected={index === activeSuggestionIndex} className={index === activeSuggestionIndex ? "active" : ""} onMouseEnter={() => setSuggestionIndex(index)} onClick={() => { setQuery(book.title); chooseBook(book); }}><span><strong>{book.title}</strong><small>{book.czechTitle}</small></span><b>{typeof book.rating === "number" ? `★ ${book.rating.toFixed(1)}` : "—"}</b><i>→</i></button>)}</div>}
         <small>MangaDex + automatický webový výběr pro čtení · další katalogy pro přesné názvy a obálky</small>
       </section>
       <section className="manga-home-tabs">
         <nav><button className={homeTab === "continue" ? "active" : ""} onClick={() => setHomeTab("continue")}>▶ Rozečtené <em>{readingBooks.length}</em></button><button className={homeTab === "completed" ? "active" : ""} onClick={() => setHomeTab("completed")}>✓ Dokončené <em>{completedBooks.length}</em></button><button className={homeTab === "downloads" ? "active" : ""} onClick={() => setHomeTab("downloads")}>⇩ Stažení</button></nav>
-        {homeTab === "continue" ? <div className={`manga-resume-row ${visibleResumeBooks.length ? "" : "empty"}`}>{renderReadingCards(visibleResumeBooks)}</div> : homeTab === "completed" ? <div className={`manga-resume-row ${visibleCompletedBooks.length ? "" : "empty"}`}>{renderReadingCards(visibleCompletedBooks, true)}</div> : <div className="manga-download-row"><button onClick={() => setView("downloads")}><b>CBZ</b><span>Komiksové čtečky</span></button><button onClick={() => setView("downloads")}><b>EPUB</b><span>E‑book čtečky</span></button><button onClick={() => setView("downloads")}><b>PDF</b><span>Tisk a archiv</span></button><button className="import-format" onClick={() => setImportOpen(true)}><b>＋</b><span>Načíst vlastní listy</span></button></div>}
+        {homeTab === "continue" ? <div className={`manga-resume-row ${visibleResumeBooks.length ? "" : "empty"}`}>{renderReadingCards(visibleResumeBooks)}</div> : homeTab === "completed" ? <div className={`manga-resume-row ${visibleCompletedBooks.length ? "" : "empty"}`}>{renderReadingCards(visibleCompletedBooks, true)}</div> : <div className="manga-download-row"><button onClick={() => navigate("downloads")}><b>CBZ</b><span>Komiksové čtečky</span></button><button onClick={() => navigate("downloads")}><b>EPUB</b><span>E‑book čtečky</span></button><button onClick={() => navigate("downloads")}><b>PDF</b><span>Tisk a archiv</span></button><button className="import-format" onClick={() => setImportOpen(true)}><b>＋</b><span>Načíst vlastní listy</span></button></div>}
       </section>
     </div>;
   };
@@ -1448,26 +1664,42 @@ export default function Home() {
     const czechChapterCount = selected.source === "mangadex" ? languageChapterCount(selected, "cs") : 0;
     const englishChapterCount = selected.source === "mangadex" ? languageChapterCount(selected, "en") : 0;
     const activeLanguage: ReadingLanguage = mangaLanguage === "cs" && czechChapterCount > 0 || englishChapterCount === 0 ? "cs" : "en";
-    const detailVolumes = selected.source === "mangadex" ? volumesInLanguage(selected, activeLanguage) : selected.volumes;
+    const detailVolumes = (selected.source === "mangadex" ? volumesInLanguage(selected, activeLanguage) : selected.volumes).slice().sort((a, b) => volumeSortKey(a) - volumeSortKey(b));
     const detailBook = { ...selected, volumes: detailVolumes };
     const primaryChapter = firstReadableChapter(detailBook) ?? (selected.source === "web" ? detailVolumes.flatMap((volume) => volume.chapters.map((item) => ({ volume, item }))).find(({ item }) => Boolean(item.externalUrl)) : undefined);
     const stats = chapterStats(detailBook);
+    const availableDownloadChapters = detailVolumes.flatMap((volume) => volume.chapters).filter((chapter) => chapter.pages > 0 || chapter.externalUrl);
+    const openDownload = (format: DownloadFormat) => {
+      setDownloadFormat(format);
+      setDownloadMode("volumes");
+      setDownloadName(selected.title);
+      setDownloadChapterIds(availableDownloadChapters.map((chapter) => chapter.id));
+      if (downloadVolumeIds.length === 0) setDownloadVolumeIds(detailVolumes.filter((volume) => volume.chapters.some((chapter) => chapter.pages > 0 || chapter.externalUrl)).map((volume) => volume.id));
+      setDownloadOpen(true);
+    };
     const chooseReadingLanguage = (language: ReadingLanguage) => {
       const languageVolumes = volumesInLanguage(selected, language);
       const languageBook = { ...selected, volumes: languageVolumes };
       const first = firstReadableChapter(languageBook) ?? languageVolumes.flatMap((volume) => volume.chapters.map((item) => ({ volume, item }))).find(({ item }) => item.pages > 0 || Boolean(item.externalUrl));
       setMangaLanguage(language);
+      setLanguageByBook((current) => {
+        const next = { ...current, [selected.id]: language };
+        safeSetItem("manga-reader-languages", JSON.stringify(next));
+        return next;
+      });
       setNotice("");
       if (first) { setVolumeId(first.volume.id); setChapterId(first.item.id); }
     };
-    const isGoblinSlayer = normalizeSearch(selected.title) === "goblin slayer";
+    const selectedNames = [selected.title, selected.czechTitle, ...selected.aliases].map(normalizeSearch);
+    const isGoblinSlayer = selectedNames.some((name) => name === "goblin slayer" || name.includes("goblin slayer"));
     const embeddedReader = webReaderSourceFor(selected);
     const openEmbeddedReader = async () => {
       let resolved = embeddedReader;
       setWebReaderResolving(true);
       try {
         if (embeddedReader.mode === "search") {
-          const response = await fetch(`/api/web-source?q=${encodeURIComponent(selected.title)}`);
+          const resolverTitles = [selected.title, selected.czechTitle, ...selected.aliases].filter(Boolean);
+          const response = await fetch(`/api/web-source?q=${encodeURIComponent(selected.title)}&titles=${encodeURIComponent(JSON.stringify(resolverTitles))}`);
           const result = await response.json() as { mode?: string; provider?: string; searchUrl?: string; title?: string; url?: string; score?: number };
           if (response.ok && result.mode === "direct" && result.url && result.searchUrl) {
             resolved = {
@@ -1486,10 +1718,10 @@ export default function Home() {
       finally { setWebReaderResolving(false); }
       setWebReader(resolved);
       setWebReaderUrl(resolved.startUrl);
-      setView("webreader");
+      navigate("webreader");
     };
     return <div className="screen detail-screen">
-      <button className="back-button" onClick={() => setView("library")}>← Zpět do knihovny</button>
+      <button className="back-button" onClick={() => navigate("library")}>← Zpět do knihovny</button>
       <div className="detail-hero">
         <Cover book={selected} />
         <div className="detail-copy">
@@ -1507,13 +1739,16 @@ export default function Home() {
           </div>
         </div>
       </div>
+      <section className="complete-download"><div><span className="overline">STAŽENÍ TITULU</span><strong>Vybrat kapitoly ke stažení</strong><small>Vyberete formát, název i rozsah. Svazky a kapitoly se pojmenují podle mangy.</small></div><div className="complete-download-actions"><button onClick={() => openDownload("CBZ")} disabled={remoteBookLoading || exporting}>STÁHNOUT</button></div></section>
+      <div className="download-mode-launch"><button onClick={() => { setDownloadMode("volumes"); openDownload("CBZ"); }} disabled={remoteBookLoading || exporting}>STÁHNOUT SEŠITY</button><button onClick={() => { setDownloadMode("chapters"); openDownload("CBZ"); }} disabled={remoteBookLoading || exporting}>STÁHNOUT KAPITOLY</button></div>
+      <section className="download-volume-picker"><div className="block-heading"><div><span className="overline">SAMOSTATNÉ SOUBORY</span><h2>Sešity ke stažení</h2></div><span>{downloadVolumeIds.length} vybráno</span></div><div className="download-volume-list">{detailVolumes.map((volume) => { const available = volume.chapters.some((chapter) => chapter.pages > 0 || chapter.externalUrl); return <label key={volume.id} className={!available ? "disabled" : ""}><input type="checkbox" disabled={!available} checked={downloadVolumeIds.includes(volume.id)} onChange={(event) => setDownloadVolumeIds((current) => event.target.checked ? [...current, volume.id] : current.filter((id) => id !== volume.id))} /><strong>{volumeDisplayLabel(volume)}</strong><span>{volumeTitle(volume)} · {volume.chapters.filter((chapter) => chapter.pages > 0 || chapter.externalUrl).length} kapitol</span></label>; })}</div></section>
       <section className="volume-section">
         <div className="block-heading"><div><span className="overline">OBSAH</span><h2>Svazky a kapitoly</h2></div><span>{remoteBookLoading ? "Načítám…" : stats.internal > 0 ? `${stats.internal} čitelných kapitol` : stats.external > 0 ? `${stats.external} ${selected.source === "web" ? "webových" : "externích"} kapitol` : "automatické webové hledání"}</span></div>
         {selected.source === "mangadex" && <div className="language-tabs" aria-label="Jazyk vydání"><button className={activeLanguage === "cs" ? "active" : ""} disabled={czechChapterCount === 0} onClick={() => chooseReadingLanguage("cs")}><b>ČEŠTINA</b><span>{czechChapterCount} kapitol</span></button><button className={activeLanguage === "en" ? "active" : ""} disabled={englishChapterCount === 0} onClick={() => chooseReadingLanguage("en")}><b>ENGLISH</b><span>{englishChapterCount} chapters</span></button></div>}
         {selected.source === "mangadex" && <p className={`source-note ${stats.internal > 0 ? "readable" : ""}`}>{stats.internal > 0 ? `Zobrazeno je pouze ${activeLanguage === "cs" ? "české" : "anglické"} vydání: ${stats.internal} kapitol lze číst přímo v aplikaci. Jazyky se už v seznamu ani při přechodu mezi kapitolami nemíchají.` : "Pro zvolený jazyk nejsou na MangaDexu čitelné stránky."}</p>}
         {["anilist", "googlebooks", "jikan", "openlibrary"].includes(selected.source) && <p className="source-note catalogue-only">Tento záznam poskytuje název, autora a obálku. Tlačítko čtení samo zkusí MangaDex a potom kompatibilní vestavěný web.</p>}
         {selected.source === "web" && <p className="source-note readable">{selected.license.startsWith("MangaRead") ? "Manga Reader našel živý seznam kapitol a seřadil jej do přehledných skupin po deseti; nejde o oficiální členění svazků." : "Manga Reader načetl pouze živý seznam kapitol a rozdělil jej podle vydaných svazků."} Kliknutí otevře vybranou kapitolu v nativní čtečce; obrázky se předem nestahují ani neukládají.</p>}
-        {detailVolumes.map((volume) => <div className="volume-row" key={volume.id}><div className="volume-number"><strong>{String(volume.number).padStart(2, "0")}</strong><span>SV.</span></div><div className="volume-meta"><strong>{volume.title}</strong><span>{volume.year} · {volume.chapters.filter((item) => item.pages > 0 || item.externalUrl).length} dostupných</span></div><div className="chapter-list">{volume.chapters.map((item) => <button key={item.id} onClick={() => openChapter(selected, volume, item)} disabled={remoteBookLoading || item.pages === 0 && !item.externalUrl}><span>{String(item.number).padStart(2, "0")}</span><strong>{item.title}</strong><small>{selected.source === "web" ? "WEB · EN" : item.language ? item.language.toUpperCase() : ""}{item.language && item.pages ? " · " : ""}{selected.source === "web" ? "" : item.externalUrl ? "externí" : item.pages > 0 ? `${item.pages} stran` : "nedostupné"}</small><i>{item.externalUrl && selected.source !== "web" ? "↗" : "→"}</i></button>)}</div></div>)}
+        {detailVolumes.map((volume) => <div className="volume-row" key={volume.id}><div className="volume-number"><strong>{volume.number >= 100000 ? "—" : String(volume.number).padStart(2, "0")}</strong><span>{volume.number >= 100000 ? "BEZ" : "SV."}</span></div><div className="volume-meta"><strong>{volumeTitle(volume)}</strong><span>{volume.year} · {volume.chapters.filter((item) => item.pages > 0 || item.externalUrl).length} dostupných</span></div><div className="chapter-list">{volume.chapters.map((item) => <button key={item.id} onClick={() => openChapter(selected, volume, item)} disabled={remoteBookLoading || item.pages === 0 && !item.externalUrl}><span>{chapterDisplayNumber(item)}</span><strong>{item.title}</strong><small>{selected.source === "web" ? "WEB · EN" : item.language ? item.language.toUpperCase() : ""}{item.language && item.pages ? " · " : ""}{selected.source === "web" ? "" : item.externalUrl ? "externí" : item.pages > 0 ? `${item.pages} stran` : "nedostupné"}</small><i>{item.externalUrl && selected.source !== "web" ? "↗" : "→"}</i></button>)}</div></div>)}
       </section>
     </div>
     ;
@@ -1528,11 +1763,11 @@ export default function Home() {
     const fitReaderImage = (image: HTMLImageElement) => {
       const viewport = readerScrollRef.current;
       if (!viewport || !image.naturalWidth || !image.naturalHeight) return;
-      const ratio = Math.min(Math.max(120, viewport.clientWidth - 172) / image.naturalWidth, Math.max(120, viewport.clientHeight) / image.naturalHeight);
+      const ratio = Math.min(Math.max(120, viewport.clientWidth - 112) / image.naturalWidth, Math.max(120, viewport.clientHeight) / image.naturalHeight);
       setReaderFitSize({ width: Math.floor(image.naturalWidth * ratio), height: Math.floor(image.naturalHeight * ratio) });
     };
     return <div className="reader-screen">
-      <div className="reader-toolbar"><button onClick={() => setView("detail")}>← <span>Zpět</span></button><div className="reader-title"><div className="reader-title-text"><strong>{selected.title}</strong><small>{selectedChapter.language ? `${selectedChapter.language.toUpperCase()} · ` : ""}Svazek {selectedVolume.number} · Kapitola {selectedChapter.number}: {selectedChapter.title}</small></div>{pages.length > 0 && <div className="reader-page-counter"><strong>{readerPage + 1} / {pages.length}</strong><span>← → listování · ↑ ↓ posouvání stránky</span></div>}</div><div className="reader-controls"><button onClick={() => setReaderScale((value) => Math.max(60, value - 10))} aria-label="Zmenšit" title="Zmenšit stránku">−</button><span>{readerScale}%</span><button onClick={() => setReaderScale((value) => Math.min(160, value + 10))} aria-label="Zvětšit" title="Zvětšit stránku">＋</button><button onClick={() => setReaderScale(100)} aria-label="Přizpůsobit stránku" title="Přizpůsobit oknu">FIT</button>{readerAtEnd && <button className="finish-reader" onClick={() => markCompleted(selected)}>HOTOVO ✓</button>}{selected.source === "mangadex" && <button onClick={() => openExternal(`https://mangadex.org/chapter/${selectedChapter.remoteId}`)}>MD ↗</button>}<button onClick={printPdf} disabled={selected.source === "web" || readerLoading || pages.length === 0 || printing}>{printing ? "PDF…" : "PDF"}</button><button onClick={saveEpub} disabled={selected.source === "web" || exporting || readerLoading || pages.length === 0}>EPUB</button><button className="accent-button" onClick={saveCbz} disabled={selected.source === "web" || exporting || readerLoading || pages.length === 0}>{exporting ? "BALÍM…" : "CBZ"}</button><button onClick={() => setChapterPanel((value) => !value)} aria-label="Přepnout panel kapitol">☰</button></div></div>
+      <div className="reader-toolbar"><button onClick={() => navigate("detail")}>← <span>Zpět</span></button><div className="reader-title"><div className="reader-title-text"><strong>{selected.title}</strong><small>{selectedChapter.language ? `${selectedChapter.language.toUpperCase()} · ` : ""}{volumeTitle(selectedVolume)} · Kapitola {selectedChapter.number}: {selectedChapter.title}</small></div>{pages.length > 0 && <div className="reader-page-counter"><strong>{readerPage + 1} / {pages.length}</strong><span>← → listování · ↑ ↓ posouvání stránky</span></div>}</div><div className="reader-controls"><button onClick={() => { setReaderFitMode("manual"); setReaderScale((value) => Math.max(60, value - 10)); }} aria-label="Zmenšit" title="Zmenšit stránku">−</button><span>{readerFitMode === "fit" ? "FIT" : `${readerScale}%`}</span><button onClick={() => { setReaderFitMode("manual"); setReaderScale((value) => Math.min(160, value + 10)); }} aria-label="Zvětšit" title="Zvětšit stránku">＋</button><button onClick={() => { setReaderFitMode("fit"); setReaderScale(100); setReaderFitSize(null); }} aria-label="Přizpůsobit stránku" title="Přizpůsobit oknu">FIT</button>{readerAtEnd && <button className="finish-reader" onClick={() => markCompleted(selected)}>HOTOVO ✓</button>}{selected.source === "mangadex" && <button onClick={() => openExternal(`https://mangadex.org/chapter/${selectedChapter.remoteId}`)}>MD ↗</button>}<button onClick={printPdf} disabled={readerLoading || pages.length === 0 || printing}>{printing ? "PDF…" : "PDF"}</button><button onClick={saveEpub} disabled={exporting || readerLoading || pages.length === 0}>EPUB</button><button onClick={() => saveEpub(true)} disabled={exporting || readerLoading || pages.length === 0}>KINDLE</button><button onClick={() => setChapterPanel((value) => !value)} aria-label="Přepnout panel kapitol">☰</button></div></div>
       <div className={`reader-body ${chapterPanel ? "with-panel" : ""}`}>
         <div className="pages-scroll" ref={readerScrollRef} tabIndex={0} aria-label="Čtečka po jedné stránce">
           {readerLoading && <div className="reader-message"><i /><strong>{selected.source === "web" ? "Načítám listy kapitoly…" : "Načítám stránky z MangaDexu…"}</strong><span>Kapitola zůstává pouze v paměti této relace.</span></div>}
@@ -1540,19 +1775,19 @@ export default function Home() {
           {!readerLoading && selected.source === "web" && pages.length === 0 && <div className="reader-message"><strong>Listy se nepodařilo načíst</strong><span>Zdroj mohl kapitolu dočasně změnit.</span><button onClick={() => openChapter(selected, selectedVolume, selectedChapter)}>Zkusit znovu</button></div>}
           {!readerLoading && visiblePage && <div className="reader-page-stage" style={{ width: `${Math.max(100, readerScale)}%`, height: `${Math.max(100, readerScale)}%` }}>
             <button className="reader-arrow previous" onClick={previousReaderPage} aria-label="Předchozí stránka">‹</button>
-            <div className="reader-single-page" style={readerScale === 100 && readerFitSize ? { width: `${readerFitSize.width}px`, height: `${readerFitSize.height}px` } : { width: `${Math.min(100, readerScale)}%`, height: `${Math.min(100, readerScale)}%` }}><ComicSheet book={selected} currentChapter={displayChapter} page={readerPage + 1} localPage={visiblePage} onImageLoad={fitReaderImage} /></div>
+            <div className="reader-single-page" style={readerFitMode === "fit" && readerFitSize ? { width: `${readerFitSize.width}px`, height: `${readerFitSize.height}px` } : { width: `${Math.min(100, readerScale)}%`, height: `${Math.min(100, readerScale)}%` }}><ComicSheet book={selected} currentChapter={displayChapter} page={readerPage + 1} localPage={visiblePage} onImageLoad={fitReaderImage} /></div>
             <button className="reader-arrow next" onClick={nextReaderPage} aria-label="Další stránka">›</button>
           </div>}
           {printing && pages.length > 0 && <div className="print-pages" aria-hidden="true">{pages.map((localPage, index) => <ComicSheet key={`print-${selectedChapter.id}-${index}`} book={selected} currentChapter={displayChapter} page={index + 1} localPage={localPage} />)}</div>}
         </div>
-        {chapterPanel && <aside className="reader-chapters"><header><strong>Obsah {readerLanguage ? `· ${readerLanguage.toUpperCase()}` : ""}</strong><button onClick={() => setChapterPanel(false)}>×</button></header>{readerNavigationVolumes.map((volume) => <div className="reader-volume" key={volume.id}><span>SV. {String(volume.number).padStart(2, "0")} · {volume.title}</span>{volume.chapters.map((item) => <button className={volume.id === selectedVolume.id && item.id === selectedChapter.id ? "active" : ""} key={item.id} onClick={() => openChapter(selected, volume, item)}><i>{String(item.number).padStart(2, "0")}</i><strong>{item.title}</strong><small>{item.language?.toUpperCase() ?? item.pages}</small></button>)}</div>)}</aside>}
+                {chapterPanel && <aside className="reader-chapters"><header><strong>ČTEČKA</strong><button onClick={() => setChapterPanel(false)}>×</button></header><nav className="reader-panel-tabs" aria-label="Reader panel"><button className={readerPanelTab === "contents" ? "active" : ""} onClick={() => setReaderPanelTab("contents")}>OBSAH</button><button className={readerPanelTab === "pages" ? "active" : ""} onClick={() => setReaderPanelTab("pages")}>STRÁNKY</button></nav>{readerPanelTab === "contents" ? readerNavigationVolumes.map((volume) => <div className="reader-volume" key={volume.id}><span>{volumeDisplayLabel(volume)} · {volumeTitle(volume)}</span>{volume.chapters.map((item) => <button className={volume.id === selectedVolume.id && item.id === selectedChapter.id ? "active" : ""} key={item.id} onClick={() => openChapter(selected, volume, item)}><i>{chapterDisplayNumber(item)}</i><strong>{item.title}</strong><small>{item.language?.toUpperCase() ?? item.pages}</small></button>)}</div>) : <div className="reader-page-grid">{pages.map((page, index) => <button className={readerPage === index ? "active" : ""} key={`${selectedChapter.id}-thumb-${index}`} onClick={() => setReaderPage(index)} aria-label={`Přejít na stránku ${index + 1}`} aria-current={readerPage === index ? "page" : undefined}><img src={page.url} alt="" loading="lazy" /><span>{index + 1}</span></button>)}</div>}</aside>}
       </div>
     </div>;
   };
 
   const renderWebReader = () => webReader && <div className="web-reader-screen">
     <div className="web-reader-toolbar">
-      <button onClick={() => setView("detail")}>← <span>Zpět na detail</span></button>
+      <button onClick={() => navigate("detail")}>← <span>Zpět na detail</span></button>
       <div><strong>{webReader.title}</strong><small>{webReader.source}</small></div>
       <div className="web-reader-actions"><button onClick={() => setWebReaderUrl(webReader.startUrl)}>{webReader.startLabel}</button><button onClick={() => setWebReaderUrl(webReader.homeUrl)}>{webReader.homeLabel}</button></div>
     </div>
@@ -1560,22 +1795,24 @@ export default function Home() {
     <iframe key={webReaderUrl} src={webReaderUrl} title={`${webReader.title} — webová čtečka`} sandbox="allow-scripts allow-forms allow-same-origin" referrerPolicy="no-referrer" />
   </div>;
 
-  const renderDownloads = () => <div className="screen simple-screen"><div className="screen-heading"><div><span className="overline">LOKÁLNÍ EXPORTY</span><h1>Stažené</h1><p>CBZ a EPUB se ukládají přímo. PDF otevře systémový dialog pro tisk a uložení.</p></div></div><div className="format-cards"><article><span>CBZ</span><h2>Pro čtečky komiksů</h2><p>Obrázky ve správném pořadí, zabalené do standardního formátu Comic Book ZIP.</p></article><article><span>EPUB</span><h2>Pro elektronické čtečky</h2><p>Obrázkový EPUB 3 s pevně seřazenými stránkami a navigací.</p></article><article><span>PDF</span><h2>Pro tisk a archiv</h2><p>V čtečce klikněte na PDF a v dialogu vyberte „Uložit jako PDF“.</p></article></div><section className="history"><h2>Historie této relace</h2>{exports.length ? exports.map((item) => <div key={item.id}><span className="file-icon">{item.format}</span><strong>{item.title}</strong><small>{item.when}</small></div>) : <p>Zatím jste nic neexportovali.</p>}</section></div>;
+  const renderDownloads = () => <div className="screen simple-screen"><div className="screen-heading"><div><span className="overline">LOKÁLNÍ EXPORTY</span><h1>Stažené</h1><p>CBZ a EPUB se ukládají přímo. PDF otevře systémový dialog pro tisk a uložení.</p></div></div><div className="format-cards"><article><span>CBZ</span><h2>Pro čtečky komiksů</h2><p>Obrázky ve správném pořadí, zabalené do standardního formátu Comic Book ZIP.</p></article><article><span>EPUB</span><h2>Pro elektronické čtečky</h2><p>Obrázkový EPUB 3 s pevně seřazenými stránkami a navigací.</p></article><article><span>KINDLE</span><h2>Pro Send to Kindle</h2><p>Kindle-friendly EPUB s obalem, metadaty a manga pořadím stránek.</p></article><article><span>PDF</span><h2>Pro tisk a archiv</h2><p>V čtečce klikněte na PDF a v dialogu vyberte „Uložit jako PDF“.</p></article></div><section className="history"><h2>Historie této relace</h2>{exports.length ? exports.map((item) => <div key={item.id}><span className="file-icon">{item.format}</span><strong>{item.title}</strong><small>{item.when}</small></div>) : <p>Zatím jste nic neexportovali.</p>}</section></div>;
 
-  const renderSettings = () => <div className="screen simple-screen"><div className="screen-heading"><div><span className="overline">NASTAVENÍ A SOUKROMÍ</span><h1>Místní aplikace</h1><p>Manga Reader nevyžaduje účet a neposílá historii čtení na vlastní server.</p></div></div><div className="settings-list"><article className="theme-settings"><div><strong>Rezim zobrazeni</strong><p>Volba plati pro celou aplikaci a ulozi se pro priste.</p></div><div className="theme-choice"><button className={theme === "light" ? "active" : ""} onClick={() => { setTheme("light"); safeSetItem("manga-reader-theme", "light"); }}>Denni</button><button className={theme === "dark" ? "active" : ""} onClick={() => { setTheme("dark"); safeSetItem("manga-reader-theme", "dark"); }}>Nocni</button></div></article><article><div><strong>Historie čtení</strong><p>Ukládá se pouze v tomto prohlížeči.</p></div><span className="status-pill">LOKÁLNĚ</span></article><article><div><strong>Importované obrázky</strong><p>Zůstanou dostupné do zavření nebo obnovení aplikace.</p></div><span className="status-pill">DOČASNĚ</span></article><article><div><strong>MangaDex</strong><p>Katalog i stránky dostupných kapitol se načítají přímo z oficiálního API.</p></div><span className="status-pill online">KAPITOLY</span></article><article><div><strong>AniList + MyAnimeList</strong><p>Dva rozsáhlé manga katalogy pro alternativní názvy, autory a obálky.</p></div><span className="status-pill anilist">KATALOG</span></article><article><div><strong>Google Books + Open Library</strong><p>Další vydání, knihovní záznamy a legální náhledy, pokud jsou dostupné.</p></div><span className="status-pill googlebooks">NÁHLEDY</span></article><article><div><strong>Lokální export</strong><p>Otevřenou kapitolu lze uložit jako CBZ, EPUB nebo vytisknout do PDF. Používejte jen obsah, který smíte stáhnout.</p></div><span className="status-pill online">AKTIVNÍ</span></article></div></div>;
+  const renderSettings = () => <div className="screen simple-screen"><div className="screen-heading"><div><span className="overline">NASTAVENÍ A SOUKROMÍ</span><h1>Místní aplikace</h1><p>Manga Reader nevyžaduje účet a neposílá historii čtení na vlastní server.</p></div></div><div className="settings-list"><article className="theme-settings"><div><strong>Režim zobrazení</strong><p>Volba platí pro celou aplikaci a uloží se pro příště.</p></div><div className="theme-choice"><button className={theme === "light" ? "active" : ""} onClick={() => { setTheme("light"); safeSetItem("manga-reader-theme", "light"); }}>Denní</button><button className={theme === "dark" ? "active" : ""} onClick={() => { setTheme("dark"); safeSetItem("manga-reader-theme", "dark"); }}>Noční</button></div></article><article><div><strong>Historie čtení</strong><p>Ukládá se pouze v tomto prohlížeči.</p></div><span className="status-pill">LOKÁLNĚ</span></article><article><div><strong>Importované obrázky</strong><p>Zůstanou dostupné do zavření nebo obnovení aplikace.</p></div><span className="status-pill">DOČASNĚ</span></article><article><div><strong>MangaDex</strong><p>Katalog i stránky dostupných kapitol se načítají přímo z oficiálního API.</p></div><span className="status-pill online">KAPITOLY</span></article><article><div><strong>AniList + MyAnimeList</strong><p>Dva rozsáhlé manga katalogy pro alternativní názvy, autory a obálky.</p></div><span className="status-pill anilist">KATALOG</span></article><article><div><strong>Google Books + Open Library</strong><p>Další vydání, knihovní záznamy a legální náhledy, pokud jsou dostupné.</p></div><span className="status-pill googlebooks">NÁHLEDY</span></article><article><div><strong>Lokální export</strong><p>Otevřenou kapitolu lze uložit jako CBZ, EPUB nebo vytisknout do PDF. Používejte jen obsah, který smíte stáhnout.</p></div><span className="status-pill online">AKTIVNÍ</span></article></div></div>;
 
   return (
     <main className="desktop-app" data-theme={theme}>
       <div className="app-frame">
-        {view !== "reader" && view !== "webreader" && view !== "home" && <aside className="app-sidebar"><button className="app-logo" onClick={goHome}><span><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 14.6 9.4 22.5 12 14.6 14.6 12 22.5 9.4 14.6 1.5 12 9.4 9.4Z" /></svg></span><strong>MANGA</strong><small>READER</small></button><nav><button className={view === "home" ? "active" : ""} onClick={goHome}><i>⌂</i>Domů</button><button className={view === "library" || view === "detail" ? "active" : ""} onClick={() => setView("library")}><i>▦</i>Knihovna</button><button className={view === "downloads" ? "active" : ""} onClick={() => setView("downloads")}><i>⇩</i>Stažené</button><button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}><i>⚙</i>Nastavení</button></nav><div className="sidebar-library"><div><span>MOJE KNIHOVNA</span><button onClick={() => setImportOpen(true)}>＋</button></div>{libraryBooks.slice(0, 4).map((book) => <button key={book.id} onClick={() => chooseBook(book)}><span style={{ background: book.accent }} /><div><strong>{book.title}</strong><small>{progress[book.id] ? `Pozice ${progressLabel(progress[book.id])}` : book.czechTitle}</small></div></button>)}</div><button className="import-side" onClick={() => setImportOpen(true)}><i>＋</i><span><strong>Importovat mangu</strong><small>JPG, PNG nebo WEBP</small></span></button></aside>}
+        {view !== "reader" && view !== "webreader" && view !== "home" && <aside className="app-sidebar"><button className="app-logo" onClick={goHome}><span><svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M12 1.5 14.6 9.4 22.5 12 14.6 14.6 12 22.5 9.4 14.6 1.5 12 9.4 9.4Z" /></svg></span><strong>MANGA</strong><small>READER</small></button><nav><button className={view === "home" ? "active" : ""} onClick={goHome}><i>⌂</i>Domů</button><button className={view === "library" || view === "detail" ? "active" : ""} onClick={() => navigate("library")}><i>▦</i>Knihovna</button><button className={view === "downloads" ? "active" : ""} onClick={() => navigate("downloads")}><i>⇩</i>Stažené</button><button className={view === "settings" ? "active" : ""} onClick={() => navigate("settings")}><i>⚙</i>Nastavení</button></nav><div className="sidebar-library"><div><span>MOJE KNIHOVNA</span><button onClick={() => setImportOpen(true)}>＋</button></div>{libraryBooks.slice(0, 4).map((book) => <button key={book.id} onClick={() => chooseBook(book)}><span style={{ background: book.accent }} /><div><strong>{book.title}</strong><small>{progress[book.id] ? `Pozice ${progressLabel(progress[book.id])}` : book.czechTitle}</small></div></button>)}</div><button className="import-side" onClick={() => setImportOpen(true)}><i>＋</i><span><strong>Importovat mangu</strong><small>JPG, PNG nebo WEBP</small></span></button></aside>}
         <section className={`workspace ${view === "reader" || view === "webreader" ? "reader-workspace" : ""} ${view === "home" ? "home-workspace" : ""}`}>
-          {view !== "reader" && view !== "webreader" && view !== "home" && <header className="workspace-header"><label className="global-search"><span>⌕</span><input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setSourceFilter("all"); if (view !== "library") setView("library"); }} onKeyDown={searchKey} placeholder="Název mangy česky nebo anglicky…" aria-label="Hledat mangu" /><kbd>ENTER</kbd></label><button className="header-import" onClick={() => setImportOpen(true)}>＋</button><button className={`workspace-theme ${theme === "light" ? "to-dark" : "to-light"}`} onClick={toggleTheme} aria-label={theme === "light" ? "Nocni rezim" : "Denni rezim"} title={theme === "light" ? "Nocni rezim" : "Denni rezim"}>{theme === "light" ? "NOC" : "DEN"}</button></header>}
+          {view !== "reader" && view !== "webreader" && view !== "home" && <header className="workspace-header"><label className="global-search"><span>⌕</span><input ref={searchRef} value={query} onChange={(event) => { setQuery(event.target.value); setSourceFilter("all"); if (view !== "library") navigate("library"); }} onKeyDown={searchKey} placeholder="Název mangy česky nebo anglicky…" aria-label="Hledat mangu" /><kbd>ENTER</kbd></label><button className="header-import" onClick={() => setImportOpen(true)}>＋</button><button className={`theme-toggle ${theme === "light" ? "to-dark" : "to-light"}`} onClick={toggleTheme} aria-label={theme === "light" ? "Přepnout na tmavý režim" : "Přepnout na světlý režim"} title={theme === "light" ? "Tmavý režim" : "Světlý režim"}>{theme === "light" ? "☾" : "☀"}</button></header>}
           {view === "home" && renderHome()}{view === "library" && renderLibrary()}{view === "detail" && renderDetail()}{view === "reader" && renderReader()}{view === "webreader" && renderWebReader()}{view === "downloads" && renderDownloads()}{view === "settings" && renderSettings()}
         </section>
       </div>
 
       {importOpen && <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setImportOpen(false)}><form className="import-dialog" onSubmit={importLocal}><header><div><span>LOKÁLNÍ IMPORT</span><h2>Načíst vlastní mangu</h2></div><button type="button" onClick={() => setImportOpen(false)}>×</button></header><p>Vyberte obrázky jedné kapitoly. Seřadí se podle názvu souboru a zůstanou pouze v paměti tohoto zařízení.</p><label>Název mangy<input value={importTitle} onChange={(event) => setImportTitle(event.target.value)} placeholder="Např. Moje manga" required autoFocus /></label><label className="file-drop"><input type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event: ChangeEvent<HTMLInputElement>) => setImportFiles(Array.from(event.target.files ?? []))} required /><span>▧</span><strong>{importFiles.length ? `${importFiles.length} obrázků vybráno` : "Vybrat stránky"}</strong><small>PNG, JPG nebo WEBP · označte všechny stránky najednou</small></label><div className="dialog-actions"><button type="button" onClick={() => setImportOpen(false)}>Zrušit</button><button className="primary-button" type="submit" disabled={!importTitle.trim() || importFiles.length === 0}>Načíst do knihovny</button></div></form></div>}
       {notice && <button className="app-toast" onClick={() => setNotice("")}>{notice}<span>×</span></button>}
+      {downloadOpen && <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setDownloadOpen(false)}><form className="download-dialog" onSubmit={(event) => { event.preventDefault(); setDownloadOpen(false); void downloadComplete(downloadFormat, downloadChapterIds, downloadName.trim() || selected.title); }}><header><div><span>EXPORT MANGY</span><h2>Vyberte stažení</h2></div><button type="button" onClick={() => setDownloadOpen(false)}>×</button></header><label>Název mangy<input value={downloadName} onChange={(event) => setDownloadName(event.target.value)} placeholder="Název pro soubory" autoFocus /></label><div className="download-format-choice"><span>Formát</span><div>{(["CBZ", "EPUB", "PDF", "KINDLE"] as DownloadFormat[]).map((format) => <button type="button" className={downloadFormat === format ? "active" : ""} key={format} onClick={() => setDownloadFormat(format)}>{format}</button>)}</div></div><div className="download-selection-head"><strong>Kapitoly ({downloadChapterIds.length})</strong><div><button type="button" onClick={() => setDownloadChapterIds(selected.volumes.flatMap((volume) => volume.chapters).filter((chapter) => chapter.pages > 0 || chapter.externalUrl).map((chapter) => chapter.id))}>Stáhnout vše</button><button type="button" onClick={() => setDownloadChapterIds([])}>Zrušit výběr</button></div></div><div className="download-chapter-list">{selected.volumes.map((volume) => { const chapters = volume.chapters.filter((chapter) => chapter.pages > 0 || chapter.externalUrl); return chapters.length ? <fieldset key={volume.id}><legend>{volumeTitle(volume)}</legend>{chapters.map((chapter) => <label key={chapter.id}><input type="checkbox" checked={downloadChapterIds.includes(chapter.id)} onChange={(event) => setDownloadChapterIds((current) => event.target.checked ? [...current, chapter.id] : current.filter((id) => id !== chapter.id))} /><span>{chapterDisplayNumber(chapter)}</span><strong>{chapter.title}</strong></label>)}</fieldset> : null; })}</div><div className="dialog-actions"><button type="button" onClick={() => setDownloadOpen(false)}>Zrušit</button><button className="primary-button" type="submit" disabled={!downloadName.trim() || downloadChapterIds.length === 0 || exporting}>Stáhnout {downloadFormat}</button></div></form></div>}
+      {downloadOpen && <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setDownloadOpen(false)}><form className="download-dialog-v2" onSubmit={(event) => { event.preventDefault(); setDownloadOpen(false); const groups = downloadMode === "volumes" ? downloadVolumeIds.map((id) => { const volume = selected.volumes.find((item) => item.id === id); return { ids: volume?.chapters.filter((chapter) => chapter.pages > 0 || chapter.externalUrl).map((chapter) => chapter.id) ?? [], label: volume ? `volume-${volume.number >= 100000 ? "bez-svazku" : String(volume.number).padStart(2, "0")}` : id }; }) : downloadChapterIds.map((id) => { const chapter = selected.volumes.flatMap((volume) => volume.chapters).find((item) => item.id === id); return { ids: [id], label: chapter ? `chapter-${chapterDisplayNumber(chapter)}` : id }; }); void downloadSelected(downloadFormat, groups, downloadName.trim() || selected.title); }}><header><div><span>EXPORT MANGY</span><h2>Vyberte stažení</h2></div><button type="button" onClick={() => setDownloadOpen(false)}>×</button></header><label>Název mangy<input value={downloadName} onChange={(event) => setDownloadName(event.target.value)} placeholder="Název pro soubory" autoFocus /></label><div className="download-scope-choice"><span>Co stáhnout</span><div><button type="button" className={downloadMode === "volumes" ? "active" : ""} onClick={() => setDownloadMode("volumes")}>SEŠITY</button><button type="button" className={downloadMode === "chapters" ? "active" : ""} onClick={() => setDownloadMode("chapters")}>KAPITOLY</button></div></div><div className="download-format-choice"><span>Formát</span><div>{(["CBZ", "EPUB", "PDF", "KINDLE"] as DownloadFormat[]).map((format) => <button type="button" className={downloadFormat === format ? "active" : ""} key={format} onClick={() => setDownloadFormat(format)}>{format}</button>)}</div></div><div className="download-selection-head"><strong>{downloadMode === "volumes" ? `Sešity (${downloadVolumeIds.length})` : `Kapitoly (${downloadChapterIds.length})`}</strong><div><button type="button" onClick={() => downloadMode === "volumes" ? setDownloadVolumeIds(selected.volumes.filter((volume) => volume.chapters.some((chapter) => chapter.pages > 0 || chapter.externalUrl)).map((volume) => volume.id)) : setDownloadChapterIds(selected.volumes.flatMap((volume) => volume.chapters).filter((chapter) => chapter.pages > 0 || chapter.externalUrl).map((chapter) => chapter.id))}>Stáhnout vše</button><button type="button" onClick={() => downloadMode === "volumes" ? setDownloadVolumeIds([]) : setDownloadChapterIds([])}>Zrušit výběr</button></div></div>{downloadMode === "volumes" ? <div className="download-chapter-list">{selected.volumes.map((volume) => { const available = volume.chapters.filter((chapter) => chapter.pages > 0 || chapter.externalUrl); return available.length ? <label className="download-volume-option" key={volume.id}><input type="checkbox" checked={downloadVolumeIds.includes(volume.id)} onChange={(event) => setDownloadVolumeIds((current) => event.target.checked ? [...current, volume.id] : current.filter((id) => id !== volume.id))} /><strong>{volumeDisplayLabel(volume)}</strong><span>{volumeTitle(volume)} · {available.length} kapitol</span></label> : null; })}</div> : <div className="download-chapter-list">{selected.volumes.map((volume) => { const chapters = volume.chapters.filter((chapter) => chapter.pages > 0 || chapter.externalUrl); return chapters.length ? <fieldset key={volume.id}><legend>{volumeTitle(volume)}</legend>{chapters.map((chapter) => <label key={chapter.id}><input type="checkbox" checked={downloadChapterIds.includes(chapter.id)} onChange={(event) => setDownloadChapterIds((current) => event.target.checked ? [...current, chapter.id] : current.filter((id) => id !== chapter.id))} /><span>{chapterDisplayNumber(chapter)}</span><strong>{chapter.title}</strong></label>)}</fieldset> : null; })}</div>}<div className="dialog-actions"><button type="button" onClick={() => setDownloadOpen(false)}>Zrušit</button><button className="primary-button" type="submit" disabled={!downloadName.trim() || (downloadMode === "volumes" ? downloadVolumeIds.length === 0 : downloadChapterIds.length === 0) || exporting}>Stáhnout {downloadFormat}</button></div></form></div>}
     </main>
   );
 }

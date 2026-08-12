@@ -8,6 +8,7 @@ function allowedChapter(url: URL) {
   if (url.hostname === "goblinslayerfree.com") return /^\/manga\/goblin-slayer-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(url.pathname);
   if (url.hostname === "dandadanmanga-online.net") return /^\/manga\/dandadan-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(url.pathname);
   if (url.hostname === "www.mangaread.org") return /^\/manga\/[^/]+\/chapter-[0-9]+(?:\.[0-9]+)?(?:-[^/]+)?\/$/.test(url.pathname);
+  if (url.hostname === "readberserk.com") return /^\/chapter\/berserk-chapter-(?:[a-p]0|[0-9]+(?:\.[0-9]+)?)\/$/.test(url.pathname);
   return false;
 }
 
@@ -19,6 +20,7 @@ function validImageFor(chapterHost: string, image: URL, tag: string) {
   if (chapterHost === "dandadanmanga-online.net") {
     return image.hostname === "img.dandadanmanga-online.net" && image.pathname.includes("/wp-content/uploads/") && Boolean(attribute(tag, "data-full-image"));
   }
+  if (chapterHost === "readberserk.com") return image.hostname === "cdn.readberserk.com" && image.pathname.includes("/file/") && /pages__img/i.test(attribute(tag, "class") ?? "");
   return image.hostname === "www.mangaread.org" && image.pathname.includes("/wp-content/uploads/WP-manga/data/") && /wp-manga-chapter-img/i.test(attribute(tag, "class") ?? "");
 }
 
