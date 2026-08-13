@@ -5,7 +5,7 @@ import { ChangeEvent, CSSProperties, FormEvent, KeyboardEvent, useEffect, useMem
 import { bestAliasScore, mangaIdentityMatches, matchesMangaQuery, normalizeTitle, titleSearchTier } from "./title-matching";
 import { createImagePdf } from "./pdf-utils";
 import { mapWithConcurrency } from "./export-utils";
-import { epubLanguage, makeProgress, parseReadingProgress } from "./reader-utils";
+import { chapterPageCacheKey, epubLanguage, makeProgress, parseReadingProgress } from "./reader-utils";
 
 type Chapter = { id: string; number: number; label?: string; title: string; pages: number; remoteId?: string; language?: string; externalUrl?: string };
 type Volume = { id: string; number: number; sortKey?: number; displayLabel?: string; confirmed?: boolean; title: string; year: string; chapters: Chapter[] };
@@ -46,7 +46,7 @@ type ExportRecord = { id: string; title: string; format: "CBZ" | "PDF" | "EPUB" 
 type DownloadFormat = "CBZ" | "EPUB" | "PDF" | "KINDLE";
 type DownloadMode = "volumes" | "chapters";
 type RemoteStatus = "idle" | "loading" | "ready" | "partial" | "error";
-const CATALOGUE_CACHE_VERSION = "2026-08-search-v3";
+const CATALOGUE_CACHE_VERSION = "2026-08-search-v4";
 type ReaderHistoryState = { mangaReaderView: View; selectedId?: string; volumeId?: string; chapterId?: string; readerPage?: number };
 type WebReaderSource = {
   title: string;
@@ -1006,14 +1006,16 @@ export default function Home() {
       if (!response.ok) throw new Error(`Native source ${response.status}`);
       const payload = await response.json() as {
         provider: string;
+        seriesUrl: string;
         grouping: "volume" | "automatic";
         chapterCount: number;
         matchedTitle: string;
         score: number;
         volumes: { number: number; title: string; confirmed?: boolean; chapters: { number: number; label: string; title?: string; url: string }[] }[];
       };
+      const webSeriesKey = `${safeName(book.id)}-${safeName(payload.provider)}`;
       const volumes: Volume[] = payload.volumes.map((volume) => ({
-        id: `web-${safeName(payload.provider)}-v-${volume.number}`,
+        id: `web-${webSeriesKey}-v-${volume.number}`,
         number: 100000 + volume.number,
         sortKey: 100000 + volume.number,
         displayLabel: "BEZ SVAZKU",
@@ -1021,7 +1023,7 @@ export default function Home() {
         title: volume.confirmed ? volume.title : volume.title || "Kapitoly bez potvrzeného svazku",
         year: book.year,
         chapters: volume.chapters.map((chapter) => ({
-          id: `web-${safeName(payload.provider)}-ch-${chapter.label}`,
+          id: `web-${webSeriesKey}-ch-${chapter.label}`,
           number: chapter.number,
           label: chapter.label,
           title: `Kapitola ${chapter.title ?? chapter.label}`,
@@ -1308,13 +1310,14 @@ export default function Home() {
     }
     persistBook(book);
     if (item.externalUrl && book.source === "web") {
+      const pageCacheKey = chapterPageCacheKey(book, item);
       setSelectedId(book.id); setVolumeId(volume.id); setChapterId(item.id); navigate("reader");
       if (item.language === "cs" || item.language === "en") setMangaLanguage(item.language);
       setReaderPage(0);
       const progressLanguage = item.language === "cs" || item.language === "en" ? item.language : undefined;
       const next = { ...progress, [book.id]: makeProgress(progressLanguage, volumeSortKey(volume), item.number, 1) };
       setProgress(next); safeSetItem("shiori-progress", JSON.stringify(next));
-      if (!remotePages[item.id]) {
+      if (!remotePages[pageCacheKey]) {
         setReaderLoading(true);
         try {
           const response = await fetch(`/api/native-source/chapter?url=${encodeURIComponent(item.externalUrl)}`);
@@ -1322,7 +1325,7 @@ export default function Home() {
           const payload = await response.json() as { images: string[] };
           const pages = payload.images.map((url, index) => ({ name: `Stránka ${index + 1}`, url }));
           if (!pages.length) throw new Error("Prázdná kapitola");
-          setRemotePages((current) => ({ ...current, [item.id]: pages }));
+          setRemotePages((current) => ({ ...current, [pageCacheKey]: pages }));
           return pages.length;
         } catch {
           if (chapterLoadIdRef.current === loadId) setNotice("Listy kapitoly se nepodařilo načíst. Zkuste kapitolu znovu.");
@@ -1331,7 +1334,7 @@ export default function Home() {
           if (chapterLoadIdRef.current === loadId) setReaderLoading(false);
         }
       }
-      return remotePages[item.id]?.length ?? item.pages;
+      return remotePages[pageCacheKey]?.length ?? item.pages;
     }
     if (item.externalUrl) {
       try {
@@ -1381,13 +1384,13 @@ export default function Home() {
         if (chapterLoadIdRef.current === loadId) setReaderLoading(false);
       }
     }
-    const cachedKey = book.source === "web" ? item.id : item.remoteId;
+    const cachedKey = chapterPageCacheKey(book, item);
     if (cachedKey && remotePages[cachedKey]) return remotePages[cachedKey].length;
     if (book.localPages) return book.localPages.length;
     return item.pages;
   };
 
-  const readerRemoteKey = selected.source === "web" ? selectedChapter.id : selectedChapter.remoteId;
+  const readerRemoteKey = chapterPageCacheKey(selected, selectedChapter);
   const readerPageCount = readerRemoteKey
     ? remotePages[readerRemoteKey]?.length ?? selectedChapter.pages
     : selected.localPages?.length ?? selectedChapter.pages;
@@ -1588,7 +1591,7 @@ export default function Home() {
   };
   const currentExportPages = () => {
     if (selected.localPages) return selected.localPages;
-    const remoteKey = selected.source === "web" ? selectedChapter.id : selectedChapter.remoteId;
+    const remoteKey = chapterPageCacheKey(selected, selectedChapter);
     return remoteKey ? remotePages[remoteKey] ?? [] : [];
   };
 
@@ -1866,7 +1869,7 @@ export default function Home() {
   };
 
   const renderReader = () => {
-    const remoteKey = selected.source === "web" ? selectedChapter.id : selectedChapter.remoteId;
+    const remoteKey = chapterPageCacheKey(selected, selectedChapter);
     const fetchedPages = remoteKey ? remotePages[remoteKey] : undefined;
     const pages = selected.source === "mangadex" || selected.source === "web" ? fetchedPages ?? [] : selected.localPages ?? Array.from({ length: selectedChapter.pages }, (_, index) => ({ name: `${index + 1}`, url: "" }));
     const displayChapter = selected.source === "mangadex" || selected.source === "web" ? { ...selectedChapter, pages: pages.length } : selectedChapter;

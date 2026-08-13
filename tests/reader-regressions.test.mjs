@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { bestAliasScore, mangaIdentityMatches, matchesMangaQuery, normalizeTitle, titleSearchTier } from "../app/title-matching.ts";
 import { mapWithConcurrency } from "../app/export-utils.ts";
-import { epubLanguage, makeProgress, parseReadingProgress } from "../app/reader-utils.ts";
+import { chapterPageCacheKey, epubLanguage, makeProgress, parseReadingProgress } from "../app/reader-utils.ts";
 
 const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
 const nativeSource = await readFile(new URL("../app/api/native-source/route.ts", import.meta.url), "utf8");
@@ -38,12 +38,21 @@ test("DXD ranks as a title token and metadata records prefer an exact MangaDex r
 });
 
 test("search cache migration drops stale web matches but keeps user data stores", () => {
-  assert.match(page, /CATALOGUE_CACHE_VERSION = "2026-08-search-v3"/);
+  assert.match(page, /CATALOGUE_CACHE_VERSION = "2026-08-search-v4"/);
   assert.match(page, /function refreshCachedBook/);
   assert.match(page, /volumes: mangaDexPlaceholder\(book\.remoteId \?\? book\.id\)/);
   assert.match(page, /mergedIds: undefined, mergedSources: undefined/);
   assert.match(page, /storedLibrary/);
   assert.match(page, /storedProgress/);
+});
+
+test("web chapter page cache is isolated by manga identity", () => {
+  const chapter = { id: "web-mangaread-ch-5", externalUrl: "https://www.mangaread.org/manga/example/chapter-5/" };
+  const hellsParadiseKey = chapterPageCacheKey({ id: "md-hells-paradise", source: "web" }, chapter);
+  const darlingKey = chapterPageCacheKey({ id: "md-darling", source: "web" }, chapter);
+  assert.notEqual(hellsParadiseKey, darlingKey);
+  assert.match(page, /const webSeriesKey = `\$\{safeName\(book\.id\)\}-\$\{safeName\(payload\.provider\)\}`/);
+  assert.doesNotMatch(page, /remotePages\[item\.id\]/);
 });
 
 test("Darling in the Franxx and Evangelion keep their main and variant mappings separate", () => {
@@ -97,7 +106,7 @@ test("Berserk resolver uses readberserk chapters and CDN pages", () => {
   assert.match(nativeChapter, /cdn\.readberserk\.com/);
   assert.match(nativeImage, /allowedImage/);
   assert.match(page, /exportImageUrl/);
-  assert.match(page, /selected\.source === "web" \? selectedChapter\.id : selectedChapter\.remoteId/);
+  assert.match(page, /chapterPageCacheKey\(selected, selectedChapter\)/);
 });
 
 test("unconfirmed grouping never relies on hardcoded Dandadan/Goblin volume ranges", () => {
