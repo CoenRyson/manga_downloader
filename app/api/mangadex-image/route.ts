@@ -1,5 +1,6 @@
 function allowedMangaDexImage(url: URL) {
   return url.protocol === "https:"
+    && (!url.port || url.port === "443")
     && /^[a-z0-9-]+\.mangadex\.network$/i.test(url.hostname)
     && /^\/(?:data|data-saver)\/[a-f0-9]+\/[^/]+$/i.test(url.pathname);
 }
@@ -27,6 +28,7 @@ export async function GET(request: Request) {
         ...(range ? { Range: range } : {}),
       },
       cache: "no-store",
+      redirect: "manual",
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`MangaDex image ${response.status}`);
@@ -39,6 +41,7 @@ export async function GET(request: Request) {
       headers: {
         "Content-Type": contentType,
         "Cache-Control": "public, max-age=3600",
+        "X-Content-Type-Options": "nosniff",
         ...(response.headers.get("content-range") ? { "Content-Range": response.headers.get("content-range") as string } : {}),
         ...(response.headers.get("accept-ranges") ? { "Accept-Ranges": response.headers.get("accept-ranges") as string } : {}),
       },

@@ -4,7 +4,7 @@ function attribute(tag: string, name: string) {
 }
 
 function allowedChapter(url: URL) {
-  if (url.protocol !== "https:") return false;
+  if (url.protocol !== "https:" || url.port && url.port !== "443") return false;
   if (url.hostname === "goblinslayerfree.com") return /^\/manga\/goblin-slayer-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(url.pathname);
   if (url.hostname === "dandadanmanga-online.net") return /^\/manga\/dandadan-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(url.pathname);
   if (url.hostname === "www.mangaread.org") return /^\/manga\/[^/]+\/chapter-[0-9]+(?:\.[0-9]+)?(?:-[^/]+)?\/$/.test(url.pathname);
@@ -13,7 +13,7 @@ function allowedChapter(url: URL) {
 }
 
 function validImageFor(chapterHost: string, image: URL, tag: string) {
-  if (image.protocol !== "https:") return false;
+  if (image.protocol !== "https:" || image.port && image.port !== "443") return false;
   if (chapterHost === "goblinslayerfree.com") {
     return ["img.mangarchive.com", "goblinslayerfree.com"].includes(image.hostname) && /^Goblin Slayer Chapter [0-9.]+ image /i.test(attribute(tag, "alt") ?? "");
   }
@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   if (!allowedChapter(chapterUrl)) return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
 
   try {
-    const response = await fetch(chapterUrl, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local page viewer" }, signal: AbortSignal.timeout(15000) });
+    const response = await fetch(chapterUrl, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local page viewer" }, redirect: "manual", signal: AbortSignal.timeout(15000) });
     if (!response.ok) throw new Error(`Zdroj odpověděl ${response.status}`);
     const html = await response.text();
     const images: string[] = [];

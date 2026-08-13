@@ -1,14 +1,6 @@
-type Candidate = { title: string; url: string; score: number };
+import { bestAliasScore } from "../../title-matching.ts";
 
-function normalize(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/&(?:amp|#0*38);/g, "&")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
+type Candidate = { title: string; url: string; score: number };
 
 function plainText(value: string) {
   return value
@@ -21,26 +13,13 @@ function plainText(value: string) {
     .trim();
 }
 
-function scoreTitle(query: string, title: string) {
-  const wanted = normalize(query);
-  const found = normalize(title);
-  if (!wanted || !found) return 0;
-  if (wanted === found) return 100;
-  if (found.startsWith(wanted) || wanted.startsWith(found)) return 82;
-  if (found.includes(wanted) || wanted.includes(found)) return 70;
-  const wantedWords = new Set(wanted.split(" "));
-  const foundWords = new Set(found.split(" "));
-  const overlap = [...wantedWords].filter((word) => foundWords.has(word)).length;
-  return Math.round((overlap / Math.max(wantedWords.size, foundWords.size)) * 60);
-}
-
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const query = params.get("q")?.trim() ?? "";
   let queryTitles = [query];
   try {
     const parsed = JSON.parse(params.get("titles") ?? "[]");
-    if (Array.isArray(parsed)) queryTitles = [...new Set([query, ...parsed].filter((value): value is string => typeof value === "string" && value.trim().length > 1))];
+    if (Array.isArray(parsed)) queryTitles = [...new Set([query, ...parsed].filter((value): value is string => typeof value === "string" && value.trim().length > 1 && value.trim().length <= 120))].slice(0, 4);
   } catch { /* fallback na hlavní titul */ }
   if (query.length < 2 || query.length > 120) {
     return Response.json({ error: "Neplatný název mangy." }, { status: 400 });
@@ -48,21 +27,23 @@ export async function GET(request: Request) {
 
   const searchUrl = `https://www.mangaread.org/?s=${encodeURIComponent(query)}&post_type=wp-manga`;
   try {
-    const response = await fetch(searchUrl, {
-      headers: { "User-Agent": "Mozilla/5.0 Manga Reader local source resolver" },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!response.ok) throw new Error(`Provider odpověděl ${response.status}`);
-    const html = await response.text();
     const candidates = new Map<string, Candidate>();
     const linkPattern = /<a[^>]+href=["'](https:\/\/www\.mangaread\.org\/manga\/[^"'?#]+\/)["'][^>]*>([\s\S]*?)<\/a>/gi;
-
-    for (const match of html.matchAll(linkPattern)) {
-      const title = plainText(match[2]);
-      if (!title) continue;
-      const candidate = { title, url: match[1], score: Math.max(...queryTitles.map((candidateTitle) => scoreTitle(candidateTitle, title))) };
-      const previous = candidates.get(candidate.url);
-      if (!previous || candidate.score > previous.score) candidates.set(candidate.url, candidate);
+    const searches = await Promise.allSettled(queryTitles.map(async (title) => {
+      const url = `https://www.mangaread.org/?s=${encodeURIComponent(title)}&post_type=wp-manga`;
+      const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 Manga Reader local source resolver" }, signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error(`Provider odpověděl ${response.status}`);
+      return response.text();
+    }));
+    for (const result of searches) {
+      if (result.status !== "fulfilled") continue;
+      for (const match of result.value.matchAll(linkPattern)) {
+        const title = plainText(match[2]);
+        if (!title) continue;
+        const candidate = { title, url: match[1], score: bestAliasScore(queryTitles, title) };
+        const previous = candidates.get(candidate.url);
+        if (!previous || candidate.score > previous.score) candidates.set(candidate.url, candidate);
+      }
     }
 
     const best = [...candidates.values()].sort((a, b) => b.score - a.score)[0];

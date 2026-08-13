@@ -1,5 +1,5 @@
 function allowedImage(url: URL) {
-  if (url.protocol !== "https:") return false;
+  if (url.protocol !== "https:" || url.port && url.port !== "443") return false;
   if (url.hostname === "cdn.readberserk.com") return url.pathname.includes("/file/");
   if (url.hostname === "img.dandadanmanga-online.net") return url.pathname.includes("/wp-content/uploads/");
   if (url.hostname === "img.mangarchive.com") return true;
@@ -25,15 +25,23 @@ export async function GET(request: Request) {
         Referer: `${imageUrl.origin}/`,
         "User-Agent": "Mozilla/5.0 Manga Reader local image proxy",
       },
+      redirect: "manual",
       signal: AbortSignal.timeout(30000),
     });
     if (!response.ok || !response.body) return Response.json({ error: `Zdroj obrázku odpověděl ${response.status}.` }, { status: 502 });
-    return new Response(response.body, {
+    const contentType = response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() ?? "";
+    if (!contentType.startsWith("image/")) return Response.json({ error: "Zdroj nevrátil obrázek." }, { status: 502 });
+    const declaredLength = Number(response.headers.get("content-length") ?? 0);
+    if (declaredLength > 30 * 1024 * 1024) return Response.json({ error: "Obrázek je příliš velký." }, { status: 413 });
+    const bytes = await response.arrayBuffer();
+    if (bytes.byteLength > 30 * 1024 * 1024) return Response.json({ error: "Obrázek je příliš velký." }, { status: 413 });
+    return new Response(bytes, {
       status: 200,
       headers: {
-        "Content-Type": response.headers.get("content-type") ?? "image/jpeg",
+        "Content-Type": contentType,
         "Cache-Control": "public, max-age=3600",
-        "Content-Length": response.headers.get("content-length") ?? "",
+        "Content-Length": String(bytes.byteLength),
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch {
