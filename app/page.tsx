@@ -482,6 +482,38 @@ function progressLabel(value?: string) {
   return `${parsed.language ? `${parsed.language.toUpperCase()} · ` : ""}${parsed.position.filter(Number.isFinite).join(".")}`;
 }
 
+const GENERIC_AUTHOR_PLACEHOLDERS = new Set(["mangadex", "neuveden autor", "anilist", "myanimelist"].map(normalizeSearch));
+const normalizedNameCache = new WeakMap<Manga, string[]>();
+
+function normalizedNamesFor(book: Manga) {
+  let cached = normalizedNameCache.get(book);
+  if (!cached) {
+    cached = [book.title, book.czechTitle, ...book.aliases].map(normalizeSearch).filter(Boolean);
+    normalizedNameCache.set(book, cached);
+  }
+  return cached;
+}
+
+function mangaIdentityMatches(left: Manga, right: Manga) {
+  const leftNames = new Set(normalizedNamesFor(left));
+  const rightNames = normalizedNamesFor(right);
+  if (rightNames.some((name) => leftNames.has(name))) return true;
+  const leftAuthor = normalizeSearch(left.author);
+  const rightAuthor = normalizeSearch(right.author);
+  const authorsMatch = leftAuthor === rightAuthor && leftAuthor.length > 2 && !GENERIC_AUTHOR_PLACEHOLDERS.has(leftAuthor);
+  const yearsMatch = Boolean(left.year && right.year && left.year === right.year);
+  if (!authorsMatch && !yearsMatch) return false;
+  // Only merge near-identical titles (minor formatting/romanization drift), not
+  // spin-offs, specials or artbooks that merely share the base title as a prefix —
+  // those are distinct works, even by the same author/year (e.g. "Death Note" vs.
+  // "Death Note: Never Complete" or "... (Official Colored)").
+  return rightNames.some((rightName) => [...leftNames].some((leftName) => {
+    const longer = Math.max(leftName.length, rightName.length);
+    const shorter = Math.min(leftName.length, rightName.length);
+    return shorter >= 7 && longer - shorter <= 6 && (leftName.includes(rightName) || rightName.includes(leftName));
+  }));
+}
+
 function volumeSortKey(volume: Volume) {
   return volume.sortKey ?? volume.number;
 }
