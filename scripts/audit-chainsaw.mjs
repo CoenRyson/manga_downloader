@@ -197,8 +197,8 @@ const report = {
   readableChapters: readableChapters.length,
   externalChapters: chapters.filter((chapter) => Boolean(chapter.externalUrl)).map((chapter) => ({ id: chapter.id, language: chapter.language, chapter: chapter.chapter, title: chapter.title, url: chapter.externalUrl })),
   languages: languageSummaries,
-  metadataFailures: chapterAudits.filter((chapter) => !chapter.metadataOk).map(({ pages, ...chapter }) => chapter),
-  metadataCountMismatches: chapterAudits.filter((chapter) => chapter.metadataOk && !chapter.metadataMatchesDeclared).map(({ pages, ...chapter }) => chapter),
+  metadataFailures: chapterAudits.filter((chapter) => !chapter.metadataOk).map((chapter) => { const item = { ...chapter }; delete item.pages; return item; }),
+  metadataCountMismatches: chapterAudits.filter((chapter) => chapter.metadataOk && !chapter.metadataMatchesDeclared).map((chapter) => { const item = { ...chapter }; delete item.pages; return item; }),
   pageFailures: pageAudits.filter((page) => !page.ok),
   fallbackPages: pageAudits.filter((page) => page.used === "original-fallback"),
 };

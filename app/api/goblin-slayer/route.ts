@@ -31,7 +31,7 @@ export async function GET() {
       title: `Kapitoly bez potvrzeného svazku · automatická skupina ${number}`,
       chapters: items,
     }));
-    return Response.json({ source: "GoblinSlayerFree", chapterCount: chapters.length, volumes });
+    return Response.json({ source: "GoblinSlayerFree", grouping: "automatic", chapterCount: chapters.length, volumes });
   } catch {
     return Response.json({ error: "Seznam Goblin Slayer se nepodařilo načíst." }, { status: 502 });
   }

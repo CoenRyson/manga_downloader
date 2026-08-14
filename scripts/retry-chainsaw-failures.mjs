@@ -114,7 +114,7 @@ report.auditRetry = {
   remainingFailures: remaining.length,
 };
 report.pageFailures = remaining;
-report.recoveredAfterThrottle = recovered.map(({ saver, original, ...item }) => item);
+report.recoveredAfterThrottle = recovered.map((entry) => { const item = { ...entry }; delete item.saver; delete item.original; return item; });
 
 for (const language of ["cs", "en"]) {
   const recoveredForLanguage = recovered.filter((item) => item.language === language).length;

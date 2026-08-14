@@ -15,13 +15,14 @@ export async function GET(request: Request) {
   } catch {
     return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
   }
-  if (chapterUrl.protocol !== "https:" || chapterUrl.hostname !== "goblinslayerfree.com" || !/^\/manga\/goblin-slayer-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(chapterUrl.pathname)) {
+  if (chapterUrl.protocol !== "https:" || chapterUrl.port && chapterUrl.port !== "443" || chapterUrl.hostname !== "goblinslayerfree.com" || !/^\/manga\/goblin-slayer-chapter-[0-9]+(?:\.[0-9]+)?\/$/.test(chapterUrl.pathname)) {
     return Response.json({ error: "Nepovolený odkaz kapitoly." }, { status: 400 });
   }
 
   try {
     const response = await fetch(chapterUrl, {
       headers: { "User-Agent": "Mozilla/5.0 Manga Reader local page viewer" },
+      redirect: "manual",
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) throw new Error(`Zdroj odpověděl ${response.status}`);

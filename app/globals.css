@@ -70,7 +70,8 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(158, 37, 45,
 .global-search > span { color: var(--accent); font-size: 22px; transform: rotate(-18deg); }
 .global-search input { width: 100%; color: var(--ink); border: 0; outline: 0; background: transparent; font-size: 13px; }
 .global-search input::placeholder { color: #9ca2ae; }
-.global-search kbd { padding: 5px 7px; color: #9da3ae; border: 1px solid #dddfe4; border-radius: 5px; background: #fff; font: 700 8px/1 var(--mono); }
+.global-search .search-enter { padding: 5px 7px; color: #7d8490; border: 1px solid #dddfe4; border-radius: 5px; background: #fff; font: 700 8px/1 var(--mono); cursor: pointer; }
+.global-search .search-enter:hover, .global-search .search-enter:focus-visible { color: #fff; border-color: var(--accent); outline: 0; background: var(--accent); }
 .header-import { width: 42px; height: 42px; flex: 0 0 auto; color: #fff; border: 0; border-radius: 10px; background: var(--accent); font-size: 19px; cursor: pointer; }
 
 .screen { height: calc(100% - 72px); padding: 34px 38px 60px; overflow-y: auto; scrollbar-color: #bfc3cc transparent; }
@@ -289,13 +290,6 @@ button:hover > .book-cover, .shelf-book:hover .book-cover { transform: translate
 .complete-download-actions button { min-height: 34px; padding: 0 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 7px; background: var(--surface, #fff); font: 800 10px/1 var(--mono); cursor: pointer; }
 .complete-download-actions button:hover:not(:disabled) { color: #fff; border-color: var(--accent); background: var(--accent); }
 .complete-download-actions button:disabled { cursor: wait; opacity: .5; }
-.download-mode-launch { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
-.download-mode-launch { display: none; }
-.download-mode-launch button { min-height: 36px; padding: 0 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface, #fff); color: var(--ink); font: 800 10px/1 var(--mono); cursor: pointer; }
-.download-mode-launch button:hover:not(:disabled) { border-color: var(--accent); color: #fff; background: var(--accent); }
-.download-volume-picker { margin: 0 0 18px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-raised, #f8f7f4); }
-.download-volume-picker { display: none; }
-.download-dialog { display: none; }
 .download-dialog-v2 { width: min(680px, calc(100vw - 28px)); max-height: min(760px, calc(100vh - 28px)); padding: 22px; overflow: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface, #fff); color: var(--ink); box-shadow: 0 24px 70px rgba(0,0,0,.25); }
 .download-dialog-v2 header, .download-dialog-v2 .download-selection-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .download-dialog-v2 header { margin-bottom: 18px; }
@@ -308,19 +302,6 @@ button:hover > .book-cover, .shelf-book:hover .book-cover { transform: translate
 .download-scope-choice button { min-height: 32px; padding: 0 11px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-raised, #f8f7f4); color: var(--ink); font: 800 10px/1 var(--mono); cursor: pointer; }
 .download-scope-choice button.active { border-color: var(--accent); background: var(--accent); color: #fff; }
 [data-theme="dark"] .download-dialog-v2, [data-theme="dark"] .download-dialog-v2 > label input, [data-theme="dark"] .download-scope-choice button { background: var(--surface-raised, #20232d); }
-.download-volume-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 7px; }
-.download-volume-list label { display: grid; grid-template-columns: 18px 70px 1fr; align-items: center; gap: 7px; min-height: 38px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface, #fff); cursor: pointer; }
-.download-volume-list label.disabled { cursor: not-allowed; opacity: .45; }
-.download-volume-list strong { font: 800 10px/1 var(--mono); color: var(--accent); }
-.download-volume-list span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-[data-theme="dark"] .download-volume-picker, [data-theme="dark"] .download-volume-list label { background: var(--surface-raised, #20232d); }
-.download-dialog { width: min(680px, calc(100vw - 28px)); max-height: min(760px, calc(100vh - 28px)); padding: 22px; overflow: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface, #fff); color: var(--ink); box-shadow: 0 24px 70px rgba(0,0,0,.25); }
-.download-dialog header, .download-selection-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
-.download-dialog header { margin-bottom: 18px; }
-.download-dialog header h2 { margin: 5px 0 0; }
-.download-dialog header button { border: 0; background: transparent; color: var(--ink); font-size: 22px; cursor: pointer; }
-.download-dialog > label { display: grid; gap: 7px; margin-bottom: 16px; color: var(--muted); font-size: 11px; font-weight: 700; }
-.download-dialog input[type="text"], .download-dialog > label input { min-height: 40px; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised, #f8f7f4); color: var(--ink); font: inherit; }
 .download-format-choice { display: grid; gap: 7px; margin-bottom: 18px; color: var(--muted); font-size: 11px; font-weight: 700; }
 .download-format-choice > div, .download-selection-head > div { display: flex; flex-wrap: wrap; gap: 7px; }
 .download-format-choice button, .download-selection-head button { min-height: 32px; padding: 0 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-raised, #f8f7f4); color: var(--ink); font: 800 10px/1 var(--mono); cursor: pointer; }
@@ -332,7 +313,6 @@ button:hover > .book-cover, .shelf-book:hover .book-cover { transform: translate
 .download-chapter-list legend { padding: 0 5px; color: var(--muted); font: 800 10px/1 var(--mono); }
 .download-chapter-list label { display: grid; grid-template-columns: 18px 48px 1fr; align-items: center; gap: 7px; min-height: 32px; color: var(--ink); font-size: 12px; cursor: pointer; }
 .download-chapter-list label span { color: var(--accent); font: 800 10px/1 var(--mono); }
-[data-theme="dark"] .download-dialog { background: var(--surface, #1a1c24); }
 [data-theme="dark"] .download-format-choice button, [data-theme="dark"] .download-selection-head button { background: var(--surface-raised, #20232d); }
 .detail-actions > button:not(.primary-button) { min-height: 42px; padding: 0 16px; color: var(--ink); border: 1px solid var(--line); border-radius: 9px; background: #fff; font-size: 11px; font-weight: 700; cursor: pointer; }
 .source-choice { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 5px 13px; margin: -10px 0 19px; padding: 12px 14px; border: 1px solid #dfe4ee; border-radius: 10px; background: #f7f9fd; }
@@ -553,7 +533,7 @@ button:hover > .book-cover, .shelf-book:hover .book-cover { transform: translate
 [data-theme="dark"] .workspace-header { background: rgba(20,22,29,.88); }
 [data-theme="dark"] .global-search { background: #1f222c; }
 [data-theme="dark"] .global-search input::placeholder { color: #6b7280; }
-[data-theme="dark"] .global-search kbd { color: rgba(255,255,255,.55); border-color: rgba(255,255,255,.15); background: #262a35; }
+[data-theme="dark"] .global-search .search-enter { color: rgba(255,255,255,.65); border-color: rgba(255,255,255,.15); background: #262a35; }
 [data-theme="dark"] .screen { scrollbar-color: rgba(255,255,255,.25) transparent; }
 [data-theme="dark"] .catalogue-filters { background: #1a1c24; }
 [data-theme="dark"] .catalogue-filters select { color: var(--ink); background: #21242e; }
@@ -648,7 +628,7 @@ button:hover > .book-cover, .shelf-book:hover .book-cover { transform: translate
   .home-workspace { padding-bottom: 0; }
   .reader-workspace { padding-bottom: 0; }
   .workspace-header { height: 62px; padding: 0 12px; }
-  .global-search kbd { display: none; }
+  .global-search .search-enter { display: none; }
   .screen { height: calc(100% - 62px); padding: 22px 15px 80px; }
   .continue-card { min-height: 275px; grid-template-columns: 1fr 100px; gap: 16px; padding: 24px 21px; }
   .continue-card .book-cover { width: 100px; }
