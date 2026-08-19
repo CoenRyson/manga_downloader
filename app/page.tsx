@@ -1582,7 +1582,9 @@ export default function Home() {
     setReaderFitMode("manual");
     safeSetItem(READER_FIT_MODE_STORAGE_KEY, "manual");
     setReaderScale((value) => {
-      const next = Math.max(60, Math.min(160, value + delta));
+      const next = readerFitMode === "fit" && delta > 0
+        ? 100
+        : Math.max(60, Math.min(160, (readerFitMode === "fit" ? 100 : value) + delta));
       safeSetItem(READER_SCALE_STORAGE_KEY, String(next));
       return next;
     });

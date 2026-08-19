@@ -37,6 +37,8 @@ test("reader keeps persistent fit/manual modes and uses viewport-contained image
   const openChapter = page.slice(page.indexOf("const openChapter"), page.indexOf("const readerRemoteKey"));
   assert.doesNotMatch(openChapter, /setReaderFitMode\("fit"\)/);
   assert.doesNotMatch(openChapter, /setReaderScale\(100\)/);
+  const changeReaderScale = page.slice(page.indexOf("const changeReaderScale"), page.indexOf("const enableReaderFit"));
+  assert.match(changeReaderScale, /readerFitMode === "fit" && delta > 0\s*\? 100/);
 });
 
 test("FIT calculation contains the page inside the available viewport", () => {
