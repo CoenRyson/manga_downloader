@@ -3,21 +3,45 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { bestAliasScore, mangaIdentityMatches, matchesMangaQuery, normalizeTitle, titleSearchTier } from "../app/title-matching.ts";
 import { mapWithConcurrency } from "../app/export-utils.ts";
-import { chapterPageCacheKey, epubLanguage, makeProgress, parseReadingProgress } from "../app/reader-utils.ts";
+import { makeExportFileName, readableExportLabel, sanitizeDownloadName } from "../app/download-utils.ts";
+import {
+  chapterPageCacheKey,
+  epubLanguage,
+  findReadingProgress,
+  fitReaderImageSize,
+  makeProgress,
+  migrateReadingProgressStore,
+  parseReadingProgress,
+  saveReadingProgress,
+} from "../app/reader-utils.ts";
 
 const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const globals = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const nativeSource = await readFile(new URL("../app/api/native-source/route.ts", import.meta.url), "utf8");
 const nativeChapter = await readFile(new URL("../app/api/native-source/chapter/route.ts", import.meta.url), "utf8");
 const nativeImage = await readFile(new URL("../app/api/native-source/image/route.ts", import.meta.url), "utf8");
 const goblinSource = await readFile(new URL("../app/api/goblin-slayer/route.ts", import.meta.url), "utf8");
 const webSource = await readFile(new URL("../app/api/web-source/route.ts", import.meta.url), "utf8");
+const localDownload = await readFile(new URL("../scripts/local-download-server.mjs", import.meta.url), "utf8");
 const titleMatching = await readFile(new URL("../app/title-matching.ts", import.meta.url), "utf8");
 
-test("reader keeps fit/manual modes and recalculates around sidebar/resize", () => {
+test("reader keeps persistent fit/manual modes and uses viewport-contained images", () => {
   assert.match(page, /readerFitMode/);
-  assert.match(page, /addEventListener\("resize"/);
+  assert.match(page, /manga-reader-fit-mode/);
+  assert.match(page, /data-reader-fit-mode=\{readerFitMode\}/);
+  assert.match(globals, /\.reader-single-page\.fit[^}]*width: 100%[^}]*height: 100%/);
+  assert.match(globals, /\.reader-single-page\.fit \.comic-sheet\.image-sheet img[^}]*position: absolute[^}]*inset: 0/);
+  assert.match(globals, /object-fit: contain/);
   assert.match(page, /readerPanelTab/);
   assert.match(page, /loading="lazy"/);
+  const openChapter = page.slice(page.indexOf("const openChapter"), page.indexOf("const readerRemoteKey"));
+  assert.doesNotMatch(openChapter, /setReaderFitMode\("fit"\)/);
+  assert.doesNotMatch(openChapter, /setReaderScale\(100\)/);
+});
+
+test("FIT calculation contains the page inside the available viewport", () => {
+  assert.deepEqual(fitReaderImageSize(1600, 2400, 900, 700), { width: 466, height: 700 });
+  assert.deepEqual(fitReaderImageSize(2400, 1600, 900, 700), { width: 900, height: 600 });
 });
 
 test("global search submits with Enter and its visible hint is clickable", () => {
@@ -94,11 +118,59 @@ test("navigation and progress retain language, chapter and page", () => {
   assert.match(page, /volume\.number >= 100000 \? "—" : String\(volume\.number\)/);
 });
 
-test("progress parser keeps legacy positions and language-specific pages", () => {
-  assert.deepEqual(parseReadingProgress("2.14"), { language: undefined, position: [2, 14] });
-  assert.deepEqual(parseReadingProgress(makeProgress("en", 100001, 14, 7)), { language: "en", position: [100001, 14, 7] });
+test("progress safely preserves normal and decimal chapters with exact resume pages", () => {
+  for (const chapterNumber of [73, 73.1, 73.2, 364.5]) {
+    const value = makeProgress("en", 100001, { id: `chapter-${chapterNumber}`, number: chapterNumber, label: String(chapterNumber) }, 7);
+    assert.deepEqual(parseReadingProgress(value), {
+      version: 2,
+      language: "en",
+      volumeSortKey: 100001,
+      chapterId: `chapter-${chapterNumber}`,
+      chapterNumber,
+      chapterLabel: String(chapterNumber),
+      page: 7,
+    });
+  }
+});
+
+test("legacy progress migrates without losing decimal chapters or page", () => {
+  assert.deepEqual(parseReadingProgress("2.14"), {
+    version: 2,
+    language: undefined,
+    volumeSortKey: 2,
+    chapterNumber: 14,
+    chapterLabel: "14",
+    page: 1,
+  });
+  assert.deepEqual(parseReadingProgress("en|100008.73.2.5"), {
+    version: 2,
+    language: "en",
+    volumeSortKey: 100008,
+    chapterNumber: 73.2,
+    chapterLabel: "73.2",
+    page: 5,
+  });
+  const migrated = migrateReadingProgressStore({ manga: "en|100008.73.2.5" });
+  assert.equal(parseReadingProgress(migrated.manga)?.chapterNumber, 73.2);
+  assert.equal(parseReadingProgress(migrated["manga::en"])?.page, 5);
+});
+
+test("Czech and English progress positions stay separate", () => {
+  let store = saveReadingProgress({}, "manga", makeProgress("cs", 100000, { id: "cs-73", number: 73 }, 2));
+  store = saveReadingProgress(store, "manga", makeProgress("en", 100000, { id: "en-73.2", number: 73.2 }, 6));
+  assert.equal(parseReadingProgress(findReadingProgress(store, ["manga"], "cs"))?.chapterId, "cs-73");
+  assert.equal(parseReadingProgress(findReadingProgress(store, ["manga"], "cs"))?.page, 2);
+  assert.equal(parseReadingProgress(findReadingProgress(store, ["manga"], "en"))?.chapterId, "en-73.2");
+  assert.equal(parseReadingProgress(findReadingProgress(store, ["manga"], "en"))?.page, 6);
   assert.equal(epubLanguage("en"), "en");
   assert.equal(epubLanguage("cs"), "cs");
+});
+
+test("reader arrows are a viewport overlay and thumbnails keep lazy fallback", () => {
+  assert.match(page, /className="reader-navigation-overlay"/);
+  assert.match(page, /<ReaderThumbnail page=\{page\}/);
+  assert.match(page, /loading="lazy" decoding="async"/);
+  assert.match(page, /thumbnailFallbackUrl \?\? page\.fallbackUrl/);
 });
 
 test("Berserk resolver uses readberserk chapters and CDN pages", () => {
@@ -119,21 +191,46 @@ test("unconfirmed grouping never relies on hardcoded Dandadan/Goblin volume rang
 
 test("EPUB and Kindle share dynamic language metadata and Kindle filename", () => {
   assert.match(page, /dc:language>\$\{epubLanguage\(exportLanguage\)\}/);
-  assert.match(page, /kindle \? "-kindle" : ""/);
+  assert.match(page, /makeExportFileName\(exportTitle, fileLabel, "epub", kindle\)/);
   assert.match(page, /format: kindle \? "KINDLE" : "EPUB"/);
+  assert.match(page, /onClick=\{\(\) => void saveEpub\(\)\}/);
+  assert.match(page, /onClick=\{\(\) => void printPdf\(\)\}/);
+  assert.doesNotMatch(page, /onClick=\{saveEpub\}/);
+  assert.doesNotMatch(page, /onClick=\{printPdf\}/);
 });
 
 test("detail page exposes complete manga export through the shared exporters", () => {
   assert.match(page, /collectCompleteExportPages/);
   assert.match(page, /complete-download/);
-  assert.match(page, /fileSuffix/);
+  assert.match(page, /saveDownloadBlob/);
+  assert.doesNotMatch(page, /targetDirectory/);
   assert.match(page, /volume-/);
   assert.match(page, /chapter-/);
   assert.match(page, /downloadMode/);
   assert.match(page, /downloadVolumeIds/);
   assert.match(page, /downloadSelected/);
+  assert.match(page, /Automatické uložení: Stažené soubory/);
+  assert.doesNotMatch(page, /VYTVOŘIT \/ VYBRAT SLOŽKU/);
+  assert.doesNotMatch(page, /downloadTargetDirectory/);
   assert.equal([...page.matchAll(/className="download-dialog-v2"/g)].length, 1);
   assert.doesNotMatch(page, /className="download-dialog"/);
+});
+
+test("download names preserve the chosen manga title and use reusable folder-safe names", () => {
+  assert.equal(sanitizeDownloadName("Moje Česká Manga"), "Moje Česká Manga");
+  assert.equal(sanitizeDownloadName('Manga: díl <1>'), "Manga- díl -1-");
+  assert.equal(sanitizeDownloadName("CON"), "_CON");
+  assert.equal(readableExportLabel("volume-02"), "Sešit 02");
+  assert.equal(readableExportLabel("chapter-73.2"), "Kapitola 73.2");
+  assert.equal(makeExportFileName("Moje Česká Manga", "volume-02", "cbz"), "Moje Česká Manga - Sešit 02.cbz");
+  assert.equal(makeExportFileName("Moje Česká Manga", "chapter-73.2", "epub", true), "Moje Česká Manga - Kapitola 73.2 - Kindle.epub");
+});
+
+test("local downloads automatically create a manga folder under Downloads", () => {
+  assert.match(localDownload, /join\(userProfile, "Downloads"\)/);
+  assert.match(localDownload, /mkdir\(mangaDirectory, \{ recursive: true \}\)/);
+  assert.match(localDownload, /createWriteStream\(destination, \{ flags: "w" \}\)/);
+  assert.match(localDownload, /allowedOrigins/);
 });
 
 test("resolver accepts aliases and rejects low confidence direct matches", () => {
