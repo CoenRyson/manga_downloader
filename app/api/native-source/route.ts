@@ -105,7 +105,7 @@ export async function GET(request: Request) {
       volumes: groupChapters(result.chapters),
       matchedTitle: "matchedTitle" in result ? result.matchedTitle : title,
       score: "score" in result ? result.score : 100,
-    });
+    }, { headers: { "Cache-Control": "public, max-age=900, stale-while-revalidate=3600" } });
   } catch {
     return Response.json({ error: "Nativní zdroj se nepodařilo načíst." }, { status: 404 });
   }

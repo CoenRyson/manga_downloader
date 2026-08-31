@@ -14,8 +14,23 @@ import {
   parseReadingProgress,
   saveReadingProgress,
 } from "../app/reader-utils.ts";
+import {
+  containedImageRect,
+  fitNormalizedPoints,
+  moveNormalizedSelection,
+  normalizeDragSelection,
+  normalizeLassoSelection,
+  pickBestOcrCandidate,
+  prepareTextForTranslation,
+  resolveJapaneseLayout,
+  resizeNormalizedSelection,
+  scoreOcrCandidate,
+  selectedTextOrAll,
+  selectionToSourcePixels,
+} from "../app/translation-utils.ts";
 
 const page = await readFile(new URL("../app/page.tsx", import.meta.url), "utf8");
+const readerTranslation = await readFile(new URL("../app/reader-translation.tsx", import.meta.url), "utf8");
 const globals = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 const nativeSource = await readFile(new URL("../app/api/native-source/route.ts", import.meta.url), "utf8");
 const nativeChapter = await readFile(new URL("../app/api/native-source/chapter/route.ts", import.meta.url), "utf8");
@@ -38,12 +53,90 @@ test("reader keeps persistent fit/manual modes and uses viewport-contained image
   assert.doesNotMatch(openChapter, /setReaderFitMode\("fit"\)/);
   assert.doesNotMatch(openChapter, /setReaderScale\(100\)/);
   const changeReaderScale = page.slice(page.indexOf("const changeReaderScale"), page.indexOf("const enableReaderFit"));
-  assert.match(changeReaderScale, /readerFitMode === "fit" && delta > 0\s*\? 100/);
+  assert.match(changeReaderScale, /readerFitMode === "fit" && delta > 0 \? 100 : baseScale \+ delta/);
 });
 
 test("FIT calculation contains the page inside the available viewport", () => {
   assert.deepEqual(fitReaderImageSize(1600, 2400, 900, 700), { width: 466, height: 700 });
   assert.deepEqual(fitReaderImageSize(2400, 1600, 900, 700), { width: 900, height: 600 });
+});
+
+test("translation selection follows the contained image and maps back to source pixels", () => {
+  assert.deepEqual(containedImageRect(600, 1000, 900, 650), { left: 255, top: 0, width: 390, height: 650 });
+  const selection = normalizeDragSelection({ x: 300, y: 80 }, { x: 100, y: 280 }, 400, 400);
+  assert.deepEqual(selection, { x: 0.25, y: 0.2, width: 0.5, height: 0.5 });
+  assert.deepEqual(selectionToSourcePixels(selection, 1600, 2400), { left: 400, top: 480, width: 800, height: 1200 });
+  assert.equal(normalizeDragSelection({ x: 1, y: 1 }, { x: 4, y: 5 }, 400, 400), null);
+  const lasso = normalizeLassoSelection([
+    { x: 20, y: 30 },
+    { x: 180, y: 20 },
+    { x: 190, y: 160 },
+    { x: 30, y: 180 },
+  ], 200, 200);
+  assert.deepEqual(lasso?.bounds, { x: 0.1, y: 0.1, width: 0.85, height: 0.8 });
+  assert.equal(lasso?.points.length, 4);
+  assert.equal(normalizeLassoSelection([{ x: 1, y: 1 }, { x: 50, y: 50 }, { x: 100, y: 100 }], 200, 200), null);
+});
+
+test("an existing OCR selection can be moved and resized before recognizing it again", () => {
+  const original = { x: 0.2, y: 0.2, width: 0.4, height: 0.3 };
+  assert.deepEqual(moveNormalizedSelection(original, 0.15, -0.1), { x: 0.35, y: 0.1, width: 0.4, height: 0.3 });
+  assert.deepEqual(moveNormalizedSelection(original, 0.8, 0.8), { x: 0.6, y: 0.7, width: 0.4, height: 0.3 });
+  const resized = resizeNormalizedSelection(original, "se", 0.2, 0.1);
+  assert.equal(resized.x, 0.2);
+  assert.equal(resized.y, 0.2);
+  assert.ok(Math.abs(resized.width - 0.6) < 1e-10);
+  assert.ok(Math.abs(resized.height - 0.4) < 1e-10);
+  const fitted = fitNormalizedPoints([{ x: 0.2, y: 0.2 }, { x: 0.6, y: 0.5 }], original, resized);
+  assert.deepEqual(fitted[0], { x: 0.2, y: 0.2 });
+  assert.ok(Math.abs(fitted[1].x - 0.8) < 1e-10);
+  assert.ok(Math.abs(fitted[1].y - 0.6) < 1e-10);
+  assert.match(readerTranslation, /UPRAVIT VÝBĚR/);
+  assert.match(readerTranslation, /POTVRDIT A ZNOVU ROZPOZNAT/);
+});
+
+test("translator uses a native text selection when present and otherwise translates the whole edit", () => {
+  assert.equal(selectedTextOrAll("Look behind you", 0, 4), "Look");
+  assert.equal(selectedTextOrAll("  Look behind you  ", 4, 4), "Look behind you");
+  assert.equal(selectedTextOrAll("", 0, 0), "");
+  assert.match(page, /ReaderTranslation/);
+  assert.match(page, /Přeložit text z obrázku/);
+  assert.match(page, /target\?\.matches\("input, textarea, select"\)/);
+});
+
+test("translator joins OCR line breaks into one contextual bubble and resolves Japanese direction", () => {
+  assert.equal(prepareTextForTranslation("LOOK\nBE-\nHIND\nYOU", "en"), "LOOK BEHIND YOU");
+  assert.equal(prepareTextForTranslation("私 \n は\n猫", "ja"), "私は猫");
+  assert.equal(prepareTextForTranslation("これは\nABC DEF\nです", "ja"), "これは ABC DEF です");
+  assert.equal(resolveJapaneseLayout("auto", 600, 300), "horizontal");
+  assert.equal(resolveJapaneseLayout("auto", 300, 600), "vertical");
+  assert.equal(resolveJapaneseLayout("horizontal", 300, 600), "horizontal");
+  assert.match(readerTranslation, /startSelectionPipeline\(next/);
+  assert.match(readerTranslation, /prepareOnDeviceTranslator/);
+  assert.doesNotMatch(readerTranslation, /ROZPOZNAT VÝBĚR/);
+  assert.match(readerTranslation, /onLostPointerCapture/);
+  assert.match(readerTranslation, /if \(open\) return;[\s\S]*setStage\("select"\)/);
+  assert.doesNotMatch(readerTranslation, /TranslateGemma|Ollama|127\.0\.0\.1:11434/i);
+});
+
+test("Chrome translation stays direct and the manual Lens fallback remains available", () => {
+  assert.match(readerTranslation, /GOOGLE LENS · PROBLEMATICKÝ FONT/);
+  const translationFunction = readerTranslation.slice(
+    readerTranslation.indexOf("async function translateBestAvailable"),
+    readerTranslation.indexOf("function externalTranslationUrl"),
+  );
+  assert.match(translationFunction, /prepared\.translator\.translate\(text\)/);
+});
+
+test("OCR compares font-friendly image variants and rejects noisy confidence", () => {
+  const clean = { text: "LOOK BEHIND YOU!", confidence: 82, variant: "contrast" };
+  const noisy = { text: "|_@@@ ?", confidence: 91, variant: "original" };
+  assert.ok(scoreOcrCandidate(clean, "en") > scoreOcrCandidate(noisy, "en"));
+  assert.deepEqual(pickBestOcrCandidate([noisy, clean], "en"), clean);
+  assert.match(readerTranslation, /createOcrVariants/);
+  assert.match(readerTranslation, /otsuThreshold/);
+  assert.match(readerTranslation, /recognizeOcrVariants/);
+  assert.match(readerTranslation, /alternativní rozložení/);
 });
 
 test("global search submits with Enter and its visible hint is clickable", () => {

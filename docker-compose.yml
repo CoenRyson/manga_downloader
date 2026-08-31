@@ -4,8 +4,23 @@ services:
     image: manga-downloader:latest
     container_name: manga-downloader
     restart: unless-stopped
+    init: true
     environment:
-      PORT: "3030"
+      PORT: "3000"
       HOST: "0.0.0.0"
+      NODE_OPTIONS: "--max-old-space-size=192"
+      UV_THREADPOOL_SIZE: "2"
     ports:
-      - "3030:3030"
+      - "${MANGA_READER_PORT:-3000}:3000"
+    mem_limit: "${MANGA_READER_MEMORY_LIMIT:-256m}"
+    cpus: "${MANGA_READER_CPU_LIMIT:-0.75}"
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"

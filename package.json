@@ -8,17 +8,21 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:nas": "node scripts/clean-nas.mjs && vite build --config vite.nas.config.ts && vite build --config vite.nas-server.config.ts && node scripts/precompress-nas.mjs",
     "start": "vinext start",
     "test": "vinext build && node --test tests/*.test.mjs && playwright test",
     "test:e2e": "playwright test",
+    "test:nas": "npm run build:nas && playwright test --config playwright.nas.config.ts",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "@paddleocr/paddleocr-js": "^0.4.2",
     "drizzle-orm": "0.45.2",
     "next": "16.2.6",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",

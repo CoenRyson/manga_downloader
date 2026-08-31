@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { GET as proxyMangaDexImage } from "../app/api/mangadex-image/route.ts";
+import { GET as proxyOcrModel } from "../app/api/ocr-model/route.ts";
 import { GET as resolveNativeSource } from "../app/api/native-source/route.ts";
 import { GET as proxyNativeImage } from "../app/api/native-source/image/route.ts";
 
@@ -56,6 +58,43 @@ test("native image proxy rejects HTML and accepts images", { concurrency: false 
     assert.equal(imageResponse.status, 200);
     assert.equal(imageResponse.headers.get("content-type"), "image/jpeg");
     assert.equal(imageResponse.headers.get("x-content-type-options"), "nosniff");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("MangaDex image proxy accepts official upload hosts and rejects lookalikes", { concurrency: false }, async () => {
+  try {
+    globalThis.fetch = async () => new Response(new Uint8Array([0xff, 0xd8, 0xff]), { headers: { "Content-Type": "image/jpeg" } });
+    const path = "/data/abcdef0123456789/page-1.jpg";
+    const official = await proxyMangaDexImage(new Request(`http://local/api/mangadex-image?url=${encodeURIComponent(`https://uploads.mangadex.org${path}`)}`));
+    assert.equal(official.status, 200);
+
+    const lookalike = await proxyMangaDexImage(new Request(`http://local/api/mangadex-image?url=${encodeURIComponent(`https://uploads.mangadex.org.evil.example${path}`)}`));
+    assert.equal(lookalike.status, 400);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("PaddleOCR model proxy exposes only the two pinned model files", { concurrency: false }, async () => {
+  const requestedUrls = [];
+  try {
+    globalThis.fetch = async (input) => {
+      requestedUrls.push(String(input));
+      return new Response(new Uint8Array([1, 2, 3]), {
+        headers: { "Content-Length": "3", "Content-Type": "application/octet-stream" },
+      });
+    };
+    const allowed = await proxyOcrModel(new Request("http://local/api/ocr-model?model=det"));
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.headers.get("content-type"), "application/x-tar");
+    assert.match(allowed.headers.get("cache-control") ?? "", /immutable/);
+    assert.match(requestedUrls[0], /PP-OCRv6_small_det_onnx_infer\.tar$/);
+
+    const rejected = await proxyOcrModel(new Request("http://local/api/ocr-model?model=anything"));
+    assert.equal(rejected.status, 404);
+    assert.equal(requestedUrls.length, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

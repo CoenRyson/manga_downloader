@@ -8,6 +8,26 @@ function allowedImage(url: URL) {
   return false;
 }
 
+function sizeLimitedStream(body: ReadableStream<Uint8Array>, maximumBytes: number) {
+  const reader = body.getReader();
+  let received = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const result = await reader.read();
+      if (result.done) return controller.close();
+      received += result.value.byteLength;
+      if (received > maximumBytes) {
+        await reader.cancel("Obrázek je příliš velký.");
+        return controller.error(new Error("Obrázek je příliš velký."));
+      }
+      controller.enqueue(result.value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
 export async function GET(request: Request) {
   const rawUrl = new URL(request.url).searchParams.get("url") ?? "";
   let imageUrl: URL;
@@ -33,14 +53,12 @@ export async function GET(request: Request) {
     if (!contentType.startsWith("image/")) return Response.json({ error: "Zdroj nevrátil obrázek." }, { status: 502 });
     const declaredLength = Number(response.headers.get("content-length") ?? 0);
     if (declaredLength > 30 * 1024 * 1024) return Response.json({ error: "Obrázek je příliš velký." }, { status: 413 });
-    const bytes = await response.arrayBuffer();
-    if (bytes.byteLength > 30 * 1024 * 1024) return Response.json({ error: "Obrázek je příliš velký." }, { status: 413 });
-    return new Response(bytes, {
+    return new Response(sizeLimitedStream(response.body, 30 * 1024 * 1024), {
       status: 200,
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=3600",
-        "Content-Length": String(bytes.byteLength),
+        "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800",
+        ...(declaredLength ? { "Content-Length": String(declaredLength) } : {}),
         "X-Content-Type-Options": "nosniff",
       },
     });

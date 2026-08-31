@@ -48,7 +48,7 @@ export async function GET(request: Request) {
       if (validImageFor(chapterUrl.hostname, imageUrl, tag) && !images.includes(imageUrl.toString())) images.push(imageUrl.toString());
     }
     if (!images.length) throw new Error("Kapitola neobsahuje žádné listy");
-    return Response.json({ provider: chapterUrl.hostname, chapterUrl: chapterUrl.toString(), pageCount: images.length, images });
+    return Response.json({ provider: chapterUrl.hostname, chapterUrl: chapterUrl.toString(), pageCount: images.length, images }, { headers: { "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400" } });
   } catch {
     return Response.json({ error: "Listy kapitoly se nepodařilo načíst." }, { status: 502 });
   }

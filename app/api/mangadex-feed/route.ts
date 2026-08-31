@@ -20,7 +20,7 @@ export async function GET(request: Request) {
     if (!response.ok) throw new Error(`MangaDex feed ${response.status}`);
 
     const payload = await response.json();
-    return Response.json(payload, { headers: { "Cache-Control": "no-store" } });
+    return Response.json(payload, { headers: { "Cache-Control": "public, max-age=600, stale-while-revalidate=3600" } });
   } catch {
     return Response.json({ error: "Seznam kapitol z MangaDexu je dočasně nedostupný." }, { status: 502 });
   }

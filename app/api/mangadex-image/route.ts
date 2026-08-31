@@ -1,7 +1,7 @@
 function allowedMangaDexImage(url: URL) {
   return url.protocol === "https:"
     && (!url.port || url.port === "443")
-    && /^[a-z0-9-]+\.mangadex\.network$/i.test(url.hostname)
+    && (url.hostname === "uploads.mangadex.org" || /^[a-z0-9-]+\.mangadex\.network$/i.test(url.hostname))
     && /^\/(?:data|data-saver)\/[a-f0-9]+\/[^/]+$/i.test(url.pathname);
 }
 
@@ -40,7 +40,7 @@ export async function GET(request: Request) {
       status: response.status,
       headers: {
         "Content-Type": contentType,
-        "Cache-Control": "public, max-age=3600",
+        "Cache-Control": "public, max-age=31536000, immutable",
         "X-Content-Type-Options": "nosniff",
         ...(response.headers.get("content-range") ? { "Content-Range": response.headers.get("content-range") as string } : {}),
         ...(response.headers.get("accept-ranges") ? { "Accept-Ranges": response.headers.get("accept-ranges") as string } : {}),

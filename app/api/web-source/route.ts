@@ -48,9 +48,9 @@ export async function GET(request: Request) {
 
     const best = [...candidates.values()].sort((a, b) => b.score - a.score)[0];
     if (!best || best.score < 55) {
-      return Response.json({ provider: "MangaRead", mode: "search", searchUrl });
+      return Response.json({ provider: "MangaRead", mode: "search", searchUrl }, { headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=1800" } });
     }
-    return Response.json({ provider: "MangaRead", mode: "direct", searchUrl, ...best });
+    return Response.json({ provider: "MangaRead", mode: "direct", searchUrl, ...best }, { headers: { "Cache-Control": "public, max-age=300, stale-while-revalidate=1800" } });
   } catch {
     return Response.json({ error: "Vyhledávání na MangaRead je dočasně nedostupné.", provider: "MangaRead", mode: "search", searchUrl }, { status: 502 });
   }

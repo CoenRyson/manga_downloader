@@ -20,12 +20,30 @@ npm run build  # sestavení aplikace
 npm start      # spuštění produkčního buildu
 ```
 
+## Docker na NASu
+
+Kontejner používá statickou SPA a minimální Node proxy. Neobsahuje `node_modules`, React server ani serverové renderování. Ve výchozím stavu běží na portu `3000` s limitem 0,75 CPU a 256 MB RAM:
+
+```bash
+docker compose up -d --build
+```
+
+Limity a vnější port lze změnit bez úpravy souboru:
+
+```bash
+MANGA_READER_PORT=3000 MANGA_READER_CPU_LIMIT=1.0 MANGA_READER_MEMORY_LIMIT=384m docker compose up -d --build
+```
+
+OCR, překlad, exporty, historie i celé uživatelské rozhraní běží v prohlížeči uživatele. Velké OCR knihovny se načtou až při použití překladu. NAS pouze doručí předkomprimované statické soubory a přeposílá zdroje, které prohlížeč nemůže načíst přímo kvůli CORS; neměnné soubory se ukládají do cache prohlížeče.
+
 ## Skripty (z package.json)
 
 - `dev` — spustí vinext v dev režimu
 - `build` — sestaví aplikaci (`vinext build`)
+- `build:nas` — vytvoří statickou NAS aplikaci a minimální proxy v `dist/nas`
 - `start` — spustí produkční build (`vinext start`)
 - `test` — sestaví projekt a spustí testy
+- `test:nas` — sestaví a otestuje přesně tu variantu, která běží v Dockeru
 - `lint` — spustí ESLint
 - `db:generate` — vygeneruje Drizzle migrace (pokud používáš Drizzle)
 

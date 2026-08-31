@@ -15,7 +15,7 @@ export async function GET(request: Request) {
       });
       if (response.ok) {
         const payload = await response.json();
-        return Response.json(payload, { headers: { "Cache-Control": "no-store" } });
+        return Response.json(payload, { headers: { "Cache-Control": "private, max-age=60" } });
       }
       if (response.status !== 429 && response.status < 500) break;
       const retryAfterHeader = response.headers.get("retry-after");

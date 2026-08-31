@@ -69,11 +69,9 @@ try {
 
   $url = "http://localhost:$Port/"
   if (-not (Test-MangaReader $url)) {
-    while (Test-PortInUse $Port) {
-      $Port += 1
-      if ($Port -gt 3010) { throw "Ports 3000 through 3010 are already occupied." }
+    if (Test-PortInUse $Port) {
+      throw "Port $Port is occupied by another application. Manga Reader stays pinned to http://localhost:$Port/ and will not silently switch ports."
     }
-    $url = "http://localhost:$Port/"
 
     $nodeExe = Find-Node
     $vinextCli = Join-Path $projectDir "node_modules\vinext\dist\cli.js"

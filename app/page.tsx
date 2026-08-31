@@ -1,11 +1,12 @@
 "use client";
 /* eslint-disable @next/next/no-img-element -- reader pages include blob URLs and allowlisted proxy URLs that Next Image cannot safely optimize */
 
-import { ChangeEvent, CSSProperties, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, CSSProperties, FormEvent, KeyboardEvent, RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { bestAliasScore, mangaIdentityMatches, matchesMangaQuery, normalizeTitle, titleSearchTier } from "./title-matching";
 import { createImagePdf } from "./pdf-utils";
 import { mapWithConcurrency } from "./export-utils";
 import { readerFixtureBook } from "./reader-fixture";
+import { ReaderTranslation } from "./reader-translation";
 import {
   makeExportFileName,
   readableExportLabel,
@@ -607,8 +608,8 @@ function Cover({ book, compact = false }: { book: Manga; compact?: boolean }) {
   );
 }
 
-function ComicSheet({ book, currentChapter, page, localPage }: { book: Manga; currentChapter: Chapter; page: number; localPage?: LocalPage }) {
-  if (localPage) return <article className="comic-sheet image-sheet" style={{ "--book-accent": book.accent, "--book-soft": book.accentSoft } as CSSProperties}><img src={localPage.url} alt={`${book.title}, stránka ${page}`} referrerPolicy="no-referrer" onError={(event) => {
+function ComicSheet({ book, currentChapter, page, localPage, imageRef }: { book: Manga; currentChapter: Chapter; page: number; localPage?: LocalPage; imageRef?: RefObject<HTMLImageElement | null> }) {
+  if (localPage) return <article className="comic-sheet image-sheet" style={{ "--book-accent": book.accent, "--book-soft": book.accentSoft } as CSSProperties}><img ref={imageRef} src={localPage.url} alt={`${book.title}, stránka ${page}`} referrerPolicy="no-referrer" onError={(event) => {
     if (!localPage.fallbackUrl || event.currentTarget.dataset.fallbackApplied) return;
     event.currentTarget.dataset.fallbackApplied = "true";
     event.currentTarget.src = localPage.fallbackUrl;
@@ -681,6 +682,7 @@ export default function Home() {
   const [readerPage, setReaderPage] = useState(0);
   const [chapterPanel, setChapterPanel] = useState(true);
   const [readerMenuOpen, setReaderMenuOpen] = useState(false);
+  const [translatorOpen, setTranslatorOpen] = useState(false);
 
   useEffect(() => {
     const restore = (state?: Partial<ReaderHistoryState> | null) => {
@@ -726,6 +728,8 @@ export default function Home() {
   const [webReaderResolving, setWebReaderResolving] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const readerScrollRef = useRef<HTMLDivElement>(null);
+  const readerPageRef = useRef<HTMLDivElement>(null);
+  const readerImageRef = useRef<HTMLImageElement>(null);
   const chapterLoadIdRef = useRef(0);
   const catalogueItemRefs = useRef(new Map<string, HTMLElement>());
 
@@ -1540,6 +1544,8 @@ export default function Home() {
   useEffect(() => {
     if (view !== "reader") return;
     const handleKey = (event: globalThis.KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target?.isContentEditable || target?.matches("input, textarea, select")) return;
       if (event.key === "ArrowRight") { event.preventDefault(); nextReaderPageRef.current(); }
       if (event.key === "ArrowLeft") { event.preventDefault(); previousReaderPageRef.current(); }
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1547,14 +1553,15 @@ export default function Home() {
         readerScrollRef.current?.scrollBy({ top: event.key === "ArrowDown" ? 120 : -120, behavior: "smooth" });
       }
       if (event.key === "Escape") {
-        if (readerMenuOpen) setReaderMenuOpen(false);
+        if (translatorOpen) setTranslatorOpen(false);
+        else if (readerMenuOpen) setReaderMenuOpen(false);
         else if (chapterPanel) setChapterPanel(false);
         else navigateRef.current("detail");
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [view, chapterPanel, readerMenuOpen]);
+  }, [view, chapterPanel, readerMenuOpen, translatorOpen]);
 
   useEffect(() => {
     if (view !== "reader") return;
@@ -1582,9 +1589,9 @@ export default function Home() {
     setReaderFitMode("manual");
     safeSetItem(READER_FIT_MODE_STORAGE_KEY, "manual");
     setReaderScale((value) => {
-      const next = readerFitMode === "fit" && delta > 0
-        ? 100
-        : Math.max(60, Math.min(160, (readerFitMode === "fit" ? 100 : value) + delta));
+      const baseScale = readerFitMode === "fit" ? 100 : value;
+      const requestedScale = readerFitMode === "fit" && delta > 0 ? 100 : baseScale + delta;
+      const next = Math.max(60, Math.min(160, requestedScale));
       safeSetItem(READER_SCALE_STORAGE_KEY, String(next));
       return next;
     });
@@ -1980,19 +1987,20 @@ export default function Home() {
   const renderReader = () => {
     const remoteKey = chapterPageCacheKey(selected, selectedChapter);
     const fetchedPages = remoteKey ? remotePages[remoteKey] : undefined;
-    const pages = selected.source === "mangadex" || selected.source === "web" ? fetchedPages ?? [] : selected.localPages ?? Array.from({ length: selectedChapter.pages }, (_, index) => ({ name: `${index + 1}`, url: "" }));
+    const pages: LocalPage[] = selected.source === "mangadex" || selected.source === "web" ? fetchedPages ?? [] : selected.localPages ?? Array.from({ length: selectedChapter.pages }, (_, index) => ({ name: `${index + 1}`, url: "" }));
     const displayChapter = selected.source === "mangadex" || selected.source === "web" ? { ...selectedChapter, pages: pages.length } : selectedChapter;
     const visiblePage = pages[readerPage];
     const readerPageKey = `${selectedChapter.id}:${readerPage}`;
     return <div className="reader-screen" data-reader-fit-mode={readerFitMode}>
       <div className="reader-toolbar" data-testid="reader-toolbar">
-        <button onClick={() => navigate("detail")}>← <span>Zpět</span></button>
+        <button onClick={() => { setTranslatorOpen(false); navigate("detail"); }}>← <span>Zpět</span></button>
         <div className="reader-title"><div className="reader-title-text"><strong>{selected.title}</strong><small>{selectedChapter.language ? `${selectedChapter.language.toUpperCase()} · ` : ""}{volumeTitle(selectedVolume)} · Kapitola {chapterDisplayNumber(selectedChapter)}: {selectedChapter.title}</small></div>{pages.length > 0 && <div className="reader-page-counter" data-testid="reader-page-counter"><strong>{readerPage + 1} / {pages.length}</strong><span>← → listování · ↑ ↓ posouvání stránky</span></div>}</div>
         <div className="reader-controls">
           <button onClick={() => changeReaderScale(-10)} aria-label="Zmenšit" title="Zmenšit stránku">−</button>
           <span data-testid="reader-zoom-value">{readerFitMode === "fit" ? "FIT" : `${readerScale}%`}</span>
           <button onClick={() => changeReaderScale(10)} aria-label="Zvětšit" title="Zvětšit stránku">＋</button>
           <button onClick={enableReaderFit} aria-label="Přizpůsobit stránku" title="Přizpůsobit oknu">FIT</button>
+          <button className={`reader-translate-action ${translatorOpen ? "active" : ""}`} onClick={() => { setTranslatorOpen((value) => !value); setChapterPanel(false); setReaderMenuOpen(false); }} aria-label="Přeložit text z obrázku" aria-pressed={translatorOpen} title="Označit bublinu a automaticky přeložit" disabled={readerLoading || !visiblePage?.url}><span className="reader-translate-long">PŘELOŽIT</span><span className="reader-translate-short" aria-hidden="true">PŘEK.</span></button>
           {readerAtEnd && <button className="finish-reader reader-secondary-action" onClick={() => markCompleted(selected)}>HOTOVO ✓</button>}
           {selected.source === "mangadex" && <button className="reader-secondary-action" onClick={() => openExternal(`https://mangadex.org/chapter/${selectedChapter.remoteId}`)}>MD ↗</button>}
           <button className="reader-secondary-action" onClick={() => void printPdf()} disabled={readerLoading || pages.length === 0 || printing}>{printing ? "PDF…" : "PDF"}</button>
@@ -2016,7 +2024,18 @@ export default function Home() {
             {!readerLoading && selected.source === "mangadex" && pages.length === 0 && <div className="reader-message"><strong>Stránky nejsou dostupné</strong><span>Zkuste kapitolu otevřít přímo v oficiální čtečce MangaDex.</span><button onClick={() => openExternal(`https://mangadex.org/chapter/${selectedChapter.remoteId}`)}>Otevřít MangaDex ↗</button></div>}
             {!readerLoading && selected.source === "web" && pages.length === 0 && <div className="reader-message"><strong>Listy se nepodařilo načíst</strong><span>Zdroj mohl kapitolu dočasně změnit.</span><button onClick={() => openChapter(selected, selectedVolume, selectedChapter)}>Zkusit znovu</button></div>}
             {!readerLoading && visiblePage && <div className="reader-page-stage" style={readerFitMode === "fit" ? { width: "100%", height: "100%" } : { width: `${Math.max(100, readerScale)}%`, height: `${Math.max(100, readerScale)}%` }}>
-              <div className={`reader-single-page ${readerFitMode}`} data-testid="reader-page" data-reader-page-key={readerPageKey} style={readerFitMode === "fit" ? undefined : { width: `${Math.min(100, readerScale)}%`, height: `${Math.min(100, readerScale)}%` }}><ComicSheet key={readerPageKey} book={selected} currentChapter={displayChapter} page={readerPage + 1} localPage={visiblePage} /></div>
+              <div ref={readerPageRef} className={`reader-single-page ${readerFitMode}`} data-testid="reader-page" data-reader-page-key={readerPageKey} style={readerFitMode === "fit" ? undefined : { width: `${Math.min(100, readerScale)}%`, height: `${Math.min(100, readerScale)}%` }}>
+                <ComicSheet key={readerPageKey} book={selected} currentChapter={displayChapter} page={readerPage + 1} localPage={visiblePage} imageRef={readerImageRef} />
+                <ReaderTranslation
+                  open={translatorOpen}
+                  pageKey={readerPageKey}
+                  preferredImageUrl={selected.source === "mangadex" ? visiblePage.fallbackUrl ?? visiblePage.url : undefined}
+                  defaultSourceLanguage={selectedChapter.language === "cs" ? "cs" : selectedChapter.language === "en" ? "en" : "ja"}
+                  imageRef={readerImageRef}
+                  pageContainerRef={readerPageRef}
+                  onClose={() => setTranslatorOpen(false)}
+                />
+              </div>
             </div>}
             {printing && pages.length > 0 && <div className="print-pages" aria-hidden="true">{pages.map((localPage, index) => <ComicSheet key={`print-${selectedChapter.id}-${index}`} book={selected} currentChapter={displayChapter} page={index + 1} localPage={localPage} />)}</div>}
           </div>
